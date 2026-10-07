@@ -23,11 +23,173 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
+#include <unistd.h>    
+#include <limits.h>    
+#include <errno.h>     
 
 #define MAXENTRADA 1024
 #define MAXTROZOS  512
 #define PROMPT     "-> "
 
+
+typedef struct NodoFichero {
+    int df;
+    int modo;
+    char *nombre;
+    struct NodoFichero *sig;
+} NodoFichero;
+
+static NodoFichero *ficheros = NULL;
+
+/* Inserta (ordenado por df) o actualiza una entrada. Devuelve -1 si no hay memoria */
+static int insertarFichero(int df, int modo, const char *nombre)
+{
+    NodoFichero **p, *nuevo;
+    char *copia;
+
+    if ((copia = strdup(nombre)) == NULL)
+        return -1;
+
+    for (p = &ficheros; *p != NULL && (*p)->df < df; p = &(*p)->sig)
+        ;
+
+    if (*p != NULL && (*p)->df == df) {     /* ya existía: se actualiza */
+        free((*p)->nombre);
+        (*p)->nombre = copia;
+        (*p)->modo = modo;
+        return 0;
+    }
+
+    if ((nuevo = malloc(sizeof(NodoFichero))) == NULL) {
+        free(copia);
+        return -1;
+    }
+    nuevo->df = df;
+    nuevo->modo = modo;
+    nuevo->nombre = copia;
+    nuevo->sig = *p;
+    *p = nuevo;
+    return 0;
+}
+
+static NodoFichero *buscarFichero(int df)
+{
+    NodoFichero *p;
+
+    for (p = ficheros; p != NULL; p = p->sig)
+        if (p->df == df)
+            return p;
+    return NULL;
+}
+
+static void eliminarFichero(int df)
+{
+    NodoFichero **p, *borrar;
+
+    for (p = &ficheros; *p != NULL; p = &(*p)->sig) {
+        if ((*p)->df == df) {
+            borrar = *p;
+            *p = borrar->sig;
+            free(borrar->nombre);
+            free(borrar);
+            return;
+        }
+    }
+}
+
+static void borrarListaFicheros(void)
+{
+    NodoFichero *p;
+
+    while (ficheros != NULL) {
+        p = ficheros;
+        ficheros = p->sig;
+        free(p->nombre);
+        free(p);
+    }
+}
+
+/* Convierte unos flags de open/fcntl en texto: "O_RDWR O_APPEND ..." */
+static void modoACadena(int modo, char *buf, size_t tam)
+{
+    size_t usado;
+
+    switch (modo & O_ACCMODE) {
+        case O_RDONLY: snprintf(buf, tam, "O_RDONLY"); break;
+        case O_WRONLY: snprintf(buf, tam, "O_WRONLY"); break;
+        case O_RDWR:   snprintf(buf, tam, "O_RDWR");   break;
+        default:       snprintf(buf, tam, "O_???");    break;
+    }
+
+#define ANADIR_FLAG(F)                                          \
+    if (modo & F) {                                             \
+        usado = strlen(buf);                                    \
+        snprintf(buf + usado, tam - usado, " %s", #F);          \
+    }
+    ANADIR_FLAG(O_CREAT)
+    ANADIR_FLAG(O_EXCL)
+    ANADIR_FLAG(O_TRUNC)
+    ANADIR_FLAG(O_APPEND)
+    ANADIR_FLAG(O_NONBLOCK)
+#undef ANADIR_FLAG
+}
+
+/* Nombre de un descriptor heredado. En Linux se lee de /proc/self/fd */
+static void nombreDescriptor(int df, char *nombre, size_t tam)
+{
+    char enlace[64];
+    ssize_t n;
+
+    snprintf(enlace, sizeof(enlace), "/proc/self/fd/%d", df);
+    n = readlink(enlace, nombre, tam - 1);
+    if (n != -1) {
+        nombre[n] = '\0';
+        return;
+    }
+    switch (df) {
+        case 0:  snprintf(nombre, tam, "entrada estandar"); break;
+        case 1:  snprintf(nombre, tam, "salida estandar");  break;
+        case 2:  snprintf(nombre, tam, "error estandar");   break;
+        default: snprintf(nombre, tam, "descriptor heredado %d", df); break;
+    }
+}
+
+/* Mete en la lista todos los descriptores que el shell hereda de su padre */
+static void cargarDescriptoresHeredados(void)
+{
+    long max = sysconf(_SC_OPEN_MAX);
+    char nombre[PATH_MAX];
+    int df, modo;
+
+    if (max < 0 || max > 65536)
+        max = 65536;
+
+    for (df = 0; df < max; df++) {
+        if ((modo = fcntl(df, F_GETFL)) == -1)
+            continue;                   /* df no está abierto */
+        nombreDescriptor(df, nombre, sizeof(nombre));
+        insertarFichero(df, modo, nombre);
+    }
+}
+
+static void listarFicherosAbiertos(void)
+{
+    NodoFichero *p;
+    char textoModo[128];
+    int modoActual, modo;
+
+    for (p = ficheros; p != NULL; p = p->sig) {
+        /* Los flags de acceso y estado se consultan al sistema para que
+         * coincidan con lsof; O_CREAT, O_EXCL y O_TRUNC solo se conocen
+         * al abrir, así que se toman de los guardados en la lista */
+        modoActual = fcntl(p->df, F_GETFL);
+        modo = (modoActual != -1) ? modoActual : p->modo;
+        modo |= p->modo & (O_CREAT | O_EXCL | O_TRUNC);
+        modoACadena(modo, textoModo, sizeof(textoModo));
+        printf("descriptor: %2d -> %-30s %s\n", p->df, p->nombre, textoModo);
+    }
+}
 
 /* Divide la línea en palabras. Devuelve el número de trozos.
  * trozos[0] es el nombre del comando y trozos[n] queda a NULL. */
@@ -42,6 +204,31 @@ static int trocearCadena(char *cadena, char *trozos[])
         i++;
     trozos[i] = NULL;
     return i;
+}
+
+/* Informa de un error de una llamada al sistema (usa errno) */
+static void errorSistema(const char *accion, const char *objeto)
+{
+    int err = errno;
+
+    if (objeto != NULL)
+        printf("Imposible %s %s: %s\n", accion, objeto, strerror(err));
+    else
+        printf("Imposible %s: %s\n", accion, strerror(err));
+}
+
+/* Convierte una cadena en descriptor. Devuelve -1 si no es válida */
+static int leerDescriptor(const char *s, int *df)
+{
+    char *fin;
+    long v;
+
+    errno = 0;
+    v = strtol(s, &fin, 10);
+    if (errno != 0 || *s == '\0' || *fin != '\0' || v < 0 || v > INT_MAX)
+        return -1;
+    *df = (int) v;
+    return 0;
 }
 
 /* ======================================================================
@@ -116,6 +303,45 @@ static int cmdSalir(int n, char *tr[])
     return 1;
 }
 
+static int cmdDup(int n, char *tr[])
+{
+    int df, nuevo, modo;
+    NodoFichero *original;
+    char nombre[PATH_MAX];
+
+    if (n < 2) {
+        listarFicherosAbiertos();
+        return 0;
+    }
+    if (leerDescriptor(tr[1], &df) == -1) {
+        printf("Descriptor no valido: %s\n", tr[1]);
+        return 0;
+    }
+
+    fflush(stdout);
+    if ((nuevo = dup(df)) == -1) {
+        errorSistema("duplicar el descriptor", tr[1]);
+        return 0;
+    }
+
+    if ((original = buscarFichero(df)) != NULL)
+        snprintf(nombre, sizeof(nombre), "%s", original->nombre);
+    else
+        nombreDescriptor(df, nombre, sizeof(nombre));
+
+    modo = fcntl(nuevo, F_GETFL);
+    if (original != NULL)
+        modo |= original->modo & (O_CREAT | O_EXCL | O_TRUNC);
+
+    if (insertarFichero(nuevo, modo, nombre) == -1) {
+        printf("Imposible anadir el duplicado a la lista: memoria insuficiente\n");
+        close(nuevo);
+        return 0;
+    }
+    printf("Anadida entrada %d a la tabla ficheros abiertos\n", nuevo);
+    return 0;
+}
+
 /* Marcador para los comandos que aún no están implementados */
 static int cmdNoImplementado(int n, char *tr[])
 {
@@ -145,7 +371,7 @@ static const Comando COMANDOS[] = {
     {"open",     cmdNoImplementado},
     {"close",    cmdNoImplementado},
     {"listopen", cmdNoImplementado},
-    {"dup",      cmdNoImplementado},
+    {"dup",      cmdDup},
     {"lseek",    cmdNoImplementado},
     {"readstr",  cmdNoImplementado},
     {"writestr", cmdNoImplementado},
@@ -178,6 +404,8 @@ int main(void)
     char *trozos[MAXTROZOS];
     int n, salir = 0;
 
+    cargarDescriptoresHeredados();
+
     while (!salir) {
         printf(PROMPT);
         fflush(stdout);
@@ -191,5 +419,6 @@ int main(void)
         fflush(stdout);
     }
 
+    borrarListaFicheros();
     return 0;
 }
