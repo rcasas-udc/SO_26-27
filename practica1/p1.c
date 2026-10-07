@@ -1,3 +1,11 @@
+/*
+ * Sistemas Operativos - Practica 1
+ *
+ * Autores:
+ *   Francisco Martínez Rubido    login: f.martinezr@udc.es
+ *   Román Casas Riveira          login: r.casas@udc.es
+ */
+
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include <stdio.h>
@@ -9,8 +17,7 @@
 #include <limits.h>
 #include <errno.h>
 
-#define MAXLINEA 1024
-#define MAXTROZOS 512
+#define MAXENTRADA 2048
 
 struct fichero {
     int df;
@@ -182,18 +189,6 @@ void ListarAbiertos()
     }
 }
 
-int TrocearCadena(char *cadena, char *trozos[])
-{
-    int i = 1;
-
-    if ((trozos[0] = strtok(cadena, " \n\t")) == NULL)
-        return 0;
-    while (i < MAXTROZOS - 1 && (trozos[i] = strtok(NULL, " \n\t")) != NULL)
-        i++;
-    trozos[i] = NULL;
-    return i;
-}
-
 // para los errores de llamadas al sistema, objeto puede ser NULL
 void ErrorSis(char *accion, char *objeto)
 {
@@ -219,21 +214,39 @@ int LeerDf(char *s, int *df)
     return 0;
 }
 
+int NumArgs(char *arg[])
+{
+    int i = 0;
 
-int Cmd_authors(int n, char *tr[])
+    while (arg[i] != NULL)
+        i++;
+    return i;
+}
+
+
+/*************COMANDOS DEL SHELL************************/
+/* todos reciben los trozos sin el nombre del comando: arg[0] es el primer argumento */
+
+void Cmd_fin(char *arg[])
+{
+    BorrarLista();
+    exit(0);
+}
+
+void Cmd_authors(char *arg[])
 {
     char *nombres[] = {"Francisco Martínez Rubido", "Román Casas Riveira"};
     char *logins[] = {"f.martinezr@udc.es", "r.casas@udc.es"};
     int nom = 1, log = 1, i;
 
-    if (n > 1) {
-        if (!strcmp(tr[1], "-l"))
+    if (arg[0] != NULL) {
+        if (!strcmp(arg[0], "-l"))
             nom = 0;
-        else if (!strcmp(tr[1], "-n"))
+        else if (!strcmp(arg[0], "-n"))
             log = 0;
         else {
-            printf("Opcion no valida: %s\n", tr[1]);
-            return 0;
+            printf("Opcion no valida: %s\n", arg[0]);
+            return;
         }
     }
 
@@ -245,29 +258,28 @@ int Cmd_authors(int n, char *tr[])
         else
             printf("%s\n", logins[i]);
     }
-    return 0;
 }
 
-int Cmd_date(int n, char *tr[])
+void Cmd_date(char *arg[])
 {
     time_t ahora = time(NULL);
     struct tm *t = localtime(&ahora);
     char buf[32];
     int fecha = 1, hora = 1;
 
-    if (n > 1) {
-        if (!strcmp(tr[1], "-d"))
+    if (arg[0] != NULL) {
+        if (!strcmp(arg[0], "-d"))
             hora = 0;
-        else if (!strcmp(tr[1], "-t"))
+        else if (!strcmp(arg[0], "-t"))
             fecha = 0;
         else {
-            printf("Opcion no valida: %s\n", tr[1]);
-            return 0;
+            printf("Opcion no valida: %s\n", arg[0]);
+            return;
         }
     }
     if (t == NULL) {
         printf("Imposible obtener la fecha\n");
-        return 0;
+        return;
     }
 
     if (fecha) {
@@ -278,108 +290,100 @@ int Cmd_date(int n, char *tr[])
         strftime(buf, sizeof(buf), "%H:%M:%S", t);
         printf("%s\n", buf);
     }
-    return 0;
 }
 
-int Cmd_exit(int n, char *tr[])
-{
-    return 1;
-}
-
-int Cmd_open(int n, char *tr[])
+void Cmd_open(char *arg[])
 {
     int i, df, modo = 0;
 
-    if (n == 1) {
+    if (arg[0] == NULL) {
         ListarAbiertos();
-        return 0;
+        return;
     }
 
-    for (i = 2; i < n; i++) {
-        if (!strcmp(tr[i], "cr"))
+    for (i = 1; arg[i] != NULL; i++) {
+        if (!strcmp(arg[i], "cr"))
             modo |= O_CREAT;
-        else if (!strcmp(tr[i], "ex"))
+        else if (!strcmp(arg[i], "ex"))
             modo |= O_EXCL;
-        else if (!strcmp(tr[i], "ro"))
+        else if (!strcmp(arg[i], "ro"))
             modo |= O_RDONLY;
-        else if (!strcmp(tr[i], "wo"))
+        else if (!strcmp(arg[i], "wo"))
             modo |= O_WRONLY;
-        else if (!strcmp(tr[i], "rw"))
+        else if (!strcmp(arg[i], "rw"))
             modo |= O_RDWR;
-        else if (!strcmp(tr[i], "ap"))
+        else if (!strcmp(arg[i], "ap"))
             modo |= O_APPEND;
-        else if (!strcmp(tr[i], "tr"))
+        else if (!strcmp(arg[i], "tr"))
             modo |= O_TRUNC;
         else {
-            printf("Modo no valido: %s\n", tr[i]);
-            return 0;
+            printf("Modo no valido: %s\n", arg[i]);
+            return;
         }
     }
 
-    df = open(tr[1], modo, 0777);
+    df = open(arg[0], modo, 0777);
     if (df == -1) {
-        ErrorSis("abrir", tr[1]);
-        return 0;
+        ErrorSis("abrir", arg[0]);
+        return;
     }
-    if (AnadirFichero(df, modo, tr[1]) == -1) {
-        printf("Imposible anadir %s a la lista: memoria insuficiente\n", tr[1]);
+    if (AnadirFichero(df, modo, arg[0]) == -1) {
+        printf("Imposible anadir %s a la lista: memoria insuficiente\n", arg[0]);
         close(df);
-        return 0;
+        return;
     }
     printf("Anadida entrada %d a la tabla ficheros abiertos\n", df);
-    return 0;
 }
 
-int Cmd_close(int n, char *tr[])
+void Cmd_close(char *arg[])
 {
     int i, df;
-    char *arg = NULL;
+    char *num = NULL;
 
     // vale "close df", "close df -f" y "close -f df"
     // -f de momento no hace nada distinto porque aun no hay mapeos
-    for (i = 1; i < n; i++) {
-        if (!strcmp(tr[i], "-f"))
+    for (i = 0; arg[i] != NULL; i++) {
+        if (!strcmp(arg[i], "-f"))
             continue;
-        if (arg != NULL || LeerDf(tr[i], &df) == -1) {
+        if (num != NULL || LeerDf(arg[i], &df) == -1) {
             printf("Uso: close df [-f]\n");
-            return 0;
+            return;
         }
-        arg = tr[i];
+        num = arg[i];
     }
-    if (arg == NULL) {
+    if (num == NULL) {
         ListarAbiertos();
-        return 0;
+        return;
     }
 
     fflush(stdout);   // por si cerramos la salida estandar
     if (close(df) == -1) {
-        ErrorSis("cerrar el descriptor", arg);
-        return 0;
+        ErrorSis("cerrar el descriptor", num);
+        return;
     }
     EliminarFichero(df);
-    return 0;
 }
 
-int Cmd_dup(int n, char *tr[])
+void Cmd_dup(char *arg[])
 {
     int df, nuevo, modo;
     char nombre[PATH_MAX];
     struct fichero *orig;
 
-    if (n < 2) {
+    if (arg[0] == NULL) {
         ListarAbiertos();
-        return 0;
+        return;
     }
 
-    if (LeerDf(tr[1], &df) == -1) {
-        printf("Descriptor no valido: %s\n", tr[1]);
-        return 0;
+    if (LeerDf(arg[0], &df) == -1) {
+        printf("Descriptor no valido: %s\n", arg[0]);
+        return;
     }
 
     fflush(stdout);
     if ((nuevo = dup(df)) == -1) {
-        ErrorSis("duplicar el descriptor", tr[1]);
-        return 0;
+        ErrorSis("duplicar el descriptor", arg[0]);
+        return;
     }
 
     orig = BuscarFichero(df);
@@ -395,151 +399,148 @@ int Cmd_dup(int n, char *tr[])
     if (AnadirFichero(nuevo, modo, nombre) == -1) {
         printf("Imposible anadir el duplicado a la lista: memoria insuficiente\n");
         close(nuevo);
-        return 0;
+        return;
     }
     printf("Anadida entrada %d a la tabla ficheros abiertos\n", nuevo);
-    return 0;
 }
 
-int Cmd_lseek(int n, char *tr[])
+void Cmd_lseek(char *arg[])
 {
     int df, ref;
     off_t pos, res;
     char *fin;
 
-    if (n != 4) {
+    if (NumArgs(arg) != 3) {
         printf("Uso: lseek df pos SEEK_SET|SEEK_CUR|SEEK_END\n");
-        return 0;
+        return;
     }
-    if (LeerDf(tr[1], &df) == -1) {
-        printf("Descriptor no valido: %s\n", tr[1]);
-        return 0;
+    if (LeerDf(arg[0], &df) == -1) {
+        printf("Descriptor no valido: %s\n", arg[0]);
+        return;
     }
 
     errno = 0;
-    pos = strtoll(tr[2], &fin, 10);
+    pos = strtoll(arg[1], &fin, 10);
     if (errno != 0 || *fin != '\0') {
-        printf("Posicion no valida: %s\n", tr[2]);
-        return 0;
+        printf("Posicion no valida: %s\n", arg[1]);
+        return;
     }
 
-    if (!strcmp(tr[3], "SEEK_SET"))
+    if (!strcmp(arg[2], "SEEK_SET"))
         ref = SEEK_SET;
-    else if (!strcmp(tr[3], "SEEK_CUR"))
+    else if (!strcmp(arg[2], "SEEK_CUR"))
         ref = SEEK_CUR;
-    else if (!strcmp(tr[3], "SEEK_END"))
+    else if (!strcmp(arg[2], "SEEK_END"))
         ref = SEEK_END;
     else {
-        printf("Referencia no valida: %s (usar SEEK_SET, SEEK_CUR o SEEK_END)\n", tr[3]);
-        return 0;
+        printf("Referencia no valida: %s (usar SEEK_SET, SEEK_CUR o SEEK_END)\n", arg[2]);
+        return;
     }
 
     res = lseek(df, pos, ref);
     if (res == -1)
-        ErrorSis("posicionar el descriptor", tr[1]);
+        ErrorSis("posicionar el descriptor", arg[0]);
     else
         printf("Nuevo offset: %lld\n", (long long) res);
-    return 0;
 }
 
-int Cmd_readstr(int n, char *tr[])
+void Cmd_readstr(char *arg[])
 {
     int df;
     long cont;
     ssize_t leidos;
     char *fin, *buf;
 
-    if (n != 3) {
+    if (NumArgs(arg) != 2) {
         printf("Uso: readstr df cont\n");
-        return 0;
+        return;
     }
-    if (LeerDf(tr[1], &df) == -1) {
-        printf("Descriptor no valido: %s\n", tr[1]);
-        return 0;
+    if (LeerDf(arg[0], &df) == -1) {
+        printf("Descriptor no valido: %s\n", arg[0]);
+        return;
     }
 
     errno = 0;
-    cont = strtol(tr[2], &fin, 10);
+    cont = strtol(arg[1], &fin, 10);
     if (errno != 0 || *fin != '\0' || cont < 0 || cont >= SSIZE_MAX) {
-        printf("Numero de bytes no valido: %s\n", tr[2]);
-        return 0;
+        printf("Numero de bytes no valido: %s\n", arg[1]);
+        return;
     }
 
     buf = malloc(cont + 1);   // +1 para el '\0'
     if (buf == NULL) {
         printf("Imposible reservar %ld bytes\n", cont);
-        return 0;
+        return;
     }
 
     leidos = read(df, buf, cont);
     if (leidos == -1) {
-        ErrorSis("leer del descriptor", tr[1]);
+        ErrorSis("leer del descriptor", arg[0]);
         free(buf);
-        return 0;
+        return;
     }
     buf[leidos] = '\0';
     printf("%s\n", buf);
     printf("Leidos %ld bytes del descriptor %d\n", (long) leidos, df);
     free(buf);
-    return 0;
 }
 
-int Cmd_writestr(int n, char *tr[])
+void Cmd_writestr(char *arg[])
 {
     int df, i, tam = 0;
     ssize_t escritos;
     char *cad;
 
-    if (n < 3) {
+    if (NumArgs(arg) < 2) {
         printf("Uso: writestr df str\n");
-        return 0;
+        return;
     }
-    if (LeerDf(tr[1], &df) == -1) {
-        printf("Descriptor no valido: %s\n", tr[1]);
-        return 0;
+    if (LeerDf(arg[0], &df) == -1) {
+        printf("Descriptor no valido: %s\n", arg[0]);
+        return;
     }
 
     // strtok separa por espacios, asi que hay que volver a juntar los trozos
-    for (i = 2; i < n; i++)
-        tam += strlen(tr[i]) + 1;
+    for (i = 1; arg[i] != NULL; i++)
+        tam += strlen(arg[i]) + 1;
     cad = malloc(tam);
     if (cad == NULL) {
         printf("Imposible reservar memoria\n");
-        return 0;
+        return;
     }
-    strcpy(cad, tr[2]);
-    for (i = 3; i < n; i++) {
+    strcpy(cad, arg[1]);
+    for (i = 2; arg[i] != NULL; i++) {
         strcat(cad, " ");
-        strcat(cad, tr[i]);
+        strcat(cad, arg[i]);
     }
 
     escritos = write(df, cad, strlen(cad));
     if (escritos == -1)
-        ErrorSis("escribir en el descriptor", tr[1]);
+        ErrorSis("escribir en el descriptor", arg[0]);
     else
         printf("Escritos %ld bytes en el descriptor %d\n", (long) escritos, df);
     free(cad);
-    return 0;
 }
 
 // TODO: ir quitando estos segun los hagamos
-int Cmd_pendiente(int n, char *tr[])
+void Cmd_pendiente(char *arg[])
 {
-    printf("%s: comando no implementado todavia\n", tr[0]);
-    return 0;
+    printf("Comando no implementado todavia\n");
 }
 
 
-struct cmd {
+/**************************SHELL**************************/
+
+struct COMANDO {
     char *nombre;
-    int (*func)(int, char **);
+    void (*funcion)(char **);
 };
 
-struct cmd comandos[] = {
+static struct COMANDO C[] = {
     {"authors", Cmd_authors},
     {"date", Cmd_date},
-    {"exit", Cmd_exit},
-    {"bye", Cmd_exit},
+    {"exit", Cmd_fin},
+    {"bye", Cmd_fin},
     {"pid", Cmd_pendiente},
     {"sysinfo", Cmd_pendiente},
     {"help", Cmd_pendiente},
@@ -557,43 +558,56 @@ struct cmd comandos[] = {
     {"deltree", Cmd_pendiente},
     {"listfile", Cmd_pendiente},
     {"list", Cmd_pendiente},
-    {NULL, NULL}
+    {NULL, NULL}            /*NULL marca el final del array*/
 };
 
-int ProcesarComando(int n, char *tr[])
+void DecidirComando(char *tr[])
 {
     int i;
 
-    for (i = 0; comandos[i].nombre != NULL; i++)
-        if (!strcmp(tr[0], comandos[i].nombre))
-            return comandos[i].func(n, tr);
-
+    if (tr[0] == NULL) return;
+    for (i = 0; C[i].nombre != NULL; i++)
+        if (!strcmp(C[i].nombre, tr[0])) {
+            (*C[i].funcion)(tr + 1);
+            return;
+        }
     printf("%s: comando no encontrado\n", tr[0]);
-    return 0;
+}
+
+int TrocearCadena(char *cadena, char *trozos[])
+{
+    int i = 1;
+
+    if ((trozos[0] = strtok(cadena, " \n\t")) == NULL)
+        return 0;
+    while ((trozos[i] = strtok(NULL, " \n\t")) != NULL)
+        i++;
+    return i;
+}
+
+void ProcesarEntrada(char *entrada)
+{
+    char *tr[MAXENTRADA / 2];
+
+    if (TrocearCadena(entrada, tr) == 0)    /*no hay nada*/
+        return;
+    DecidirComando(tr);
 }
 
 int main()
 {
-    char linea[MAXLINEA];
-    char *trozos[MAXTROZOS];
-    int n, terminado = 0;
+    char entrada[MAXENTRADA];
 
     CargarHeredados();
 
-    while (!terminado) {
+    while (1) {
         printf("-> ");
         fflush(stdout);
-        if (fgets(linea, MAXLINEA, stdin) == NULL) {   // ctrl-D
+        if (fgets(entrada, MAXENTRADA, stdin) == NULL) {   // ctrl-D
             printf("\n");
-            break;
+            Cmd_fin(NULL);
         }
-        n = TrocearCadena(linea, trozos);
-        if (n == 0)
-            continue;
-        terminado = ProcesarComando(n, trozos);
+        ProcesarEntrada(entrada);
         fflush(stdout);
     }
-
-    BorrarLista();
-    return 0;
 }
