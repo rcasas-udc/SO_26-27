@@ -14,68 +14,68 @@ typedef struct {
 
 static const Ayuda AYUDAS[] = {
     {"authors", "authors [-l|-n]",
-     "Muestra los nombres y logins de los autores del shell.\n"
-     "\t-l: muestra solo los logins\n"
-     "\t-n: muestra solo los nombres"},
+     "shows the shell's authors (names and logins)\n"
+     "\t-l: shows only the logins\n"
+     "\t-n: shows only the names"},
     {"pid", "pid [-p]",
-     "Muestra el pid del shell.\n"
-     "\t-p: muestra el pid del proceso padre del shell"},
+     "shows ths shell's pid\n"
+     "\t-p: shows the pid of the shell's parent process"},
     {"date", "date [-d|-t]",
-     "Muestra la fecha y la hora actuales.\n"
-     "\t-d: muestra solo la fecha (DD/MM/AAAA)\n"
-     "\t-t: muestra solo la hora (hh:mm:ss)"},
+     "shows the current date and time.\n"
+     "\t-d: shows only the date (DD/MM/AAAA)\n"
+     "\t-t: shows only the time (hh:mm:ss)"},
     {"sysinfo", "sysinfo",
-     "Muestra informacion de la maquina que ejecuta el shell (como uname -a)"},
+     "shows information about the machine running the shell (like uname -a)"},
     {"help", "help [cmd]",
-     "Lista los comandos disponibles. help cmd muestra la ayuda del comando cmd"},
-    {"exit", "exit", "Termina la ejecucion del shell"},
-    {"bye", "bye", "Termina la ejecucion del shell"},
+     "lists the available commands. help cmd shows help for the cmd command"},
+    {"exit", "exit", "terminates the shell's execution"},
+    {"bye", "bye", "terminates the shell's execution"},
     {"chdir", "chdir [dir]",
-     "Cambia el directorio de trabajo del shell a dir.\n"
-     "Sin argumentos muestra el directorio de trabajo actual"},
+     "changes the shell's working directory to dir.\n"
+     "Without arguments it shows the current working directory"},
     {"open", "open [fich] [m1] [m2] ...",
-     "Abre el fichero fich y lo anade a la lista de ficheros abiertos del shell.\n"
-     "Modos: cr: O_CREAT, ap: O_APPEND, ex: O_EXCL, ro: O_RDONLY,\n"
+     "opens the file fich and adds it to the list of open files in the shell.\n"
+     "Modes: cr: O_CREAT, ap: O_APPEND, ex: O_EXCL, ro: O_RDONLY,\n"
      "       rw: O_RDWR, wo: O_WRONLY, tr: O_TRUNC\n"
-     "Sin argumentos lista los ficheros abiertos del shell"},
+     "Without arguments it lists the open files in the shell"},
     {"close", "close df [-f]",
-     "Cierra el descriptor df y elimina su entrada de la lista de ficheros abiertos.\n"
-     "\t-f: cierra aunque df corresponda a un mapeo activo"},
+     "closes the file descriptor df, and eliminates the corresponding list entry\n"
+     "\t-f: closes even if df corresponds to an active mapping"},
     {"listopen", "listopen",
-     "Lista los ficheros abiertos del shell (descriptor, nombre y modo)"},
+     "lists the open files in the shell (descriptor, name and mode)"},
     {"dup", "dup df",
-     "Duplica el descriptor df y anade el nuevo descriptor a la lista de ficheros abiertos"},
+     "duplicates the file descriptor df and adds the new descriptor to the list of open files"},
     {"lseek", "lseek df pos ref",
-     "Posiciona el offset del descriptor df en pos. ref puede ser:\n"
-     "\tSEEK_SET: pos relativo al principio del fichero\n"
-     "\tSEEK_CUR: pos relativo a la posicion actual\n"
-     "\tSEEK_END: pos relativo al final del fichero"},
+     "positions the offset if file descriptor to pos. ref is the reference and can be:\n"
+     "\tSEEK_SET: pos is relative to the beginning of the file\n"
+     "\tSEEK_CUR: pos is relative to the current position\n"
+     "\tSEEK_END: pos is relative to the end of the file"},
     {"readstr", "readstr df cont",
-     "Lee cont bytes del descriptor df y los muestra en pantalla como una cadena"},
+     "reads cont bytes from the file descriptor df and displays them on screen as a string"},
     {"writestr", "writestr df str",
-     "Escribe la cadena str en el fichero abierto con descriptor df"},
+     "writes the string str to the file opened with descriptor df"},
     {"makefile", "makefile nombre",
-     "Crea un fichero vacio de nombre nombre"},
+     "creates an empty file with the name nombre"},
     {"makedir", "makedir nombre",
-     "Crea un directorio de nombre nombre"},
+     "creates a directory with the name nombre"},
     {"delete", "delete n1 n2 ...",
-     "Borra los ficheros, enlaces y/o directorios vacios n1, n2 ..."},
+     "deletes the files, links and/or empty directories n1, n2 ..."},
     {"deltree", "deltree n1 n2 ...",
-     "Borra los ficheros, enlaces y/o directorios n1, n2 ...\n"
-     "Si un directorio no esta vacio se borra junto con todo su contenido"},
+     "deletes the files, links and/or directories n1, n2 ...\n"
+     "If a directory is not empty, it is deleted along with all its content"},
     {"listfile", "listfile [-long] [-link] [-acc] n1 n2 ...",
-     "Muestra informacion de los objetos del sistema de ficheros n1, n2 ...\n"
-     "Si un nombre es un directorio, se muestra informacion del propio directorio.\n"
-     "Por defecto solo se muestran nombre y tamano.\n"
-     "\t-long: listado largo (fecha, enlaces, inodo, propietario, grupo, modo)\n"
-     "\t-link: si es un enlace simbolico, muestra tambien a donde apunta\n"
-     "\t-acc:  usa la fecha de ultimo acceso"},
+     "Displays information about the file system objects n1, n2 ...\n"
+     "If a name is a directory, information about the directory itself is displayed.\n"
+     "By default, only the name and size are shown.\n"
+     "\t-long: long listing (date, links, inode, owner, group, mode)\n"
+     "\t-link: if it is a symbolic link, also shows where it points\n"
+     "\t-acc:  uses the last access date"},
     {"list", "list [-reca] [-recb] [-hid] [-long] [-link] [-acc] n1 n2 ...",
-     "Como listfile, pero si un nombre es un directorio se lista su contenido.\n"
-     "\t-hid:  lista tambien los ficheros ocultos\n"
-     "\t-reca: recursivo; la recursion se hace DESPUES de listar el directorio\n"
-     "\t-recb: recursivo; la recursion se hace ANTES de listar el directorio\n"
-     "\t-long, -link, -acc: como en listfile"},
+     "Similar to listfile, but if a name is a directory, its content is listed.\n"
+     "\t-hid:  lists also the hidden files\n"
+     "\t-reca: recursive; the recursion is done AFTER listing the directory\n"
+     "\t-recb: recursive; the recursion is done BEFORE listing the directory\n"
+     "\t-long, -link, -acc: as in listfile"},
 };
 
 #define NUM_AYUDAS ((int)(sizeof(AYUDAS) / sizeof(AYUDAS[0])))
