@@ -16,6 +16,12 @@
 #include <unistd.h>
 #include <limits.h>
 #include <errno.h>
+#include <sys/utsname.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <pwd.h>
+#include <grp.h>
 
 #define MAXENTRADA 2048
 
@@ -522,13 +528,137 @@ void Cmd_writestr(char *arg[])
     free(cad);
 }
 
-// TODO: ir quitando estos segun los hagamos
-void Cmd_pendiente(char *arg[])
-{
-    printf("Comando no implementado todavia\n");
+void Cmd_listopen(char * arg[]){
+    ListarAbiertos();
 }
 
+void Cmd_date(char * arg[]){
+  time_t t=time(NULL);
+  struct tm * date= localtime(&t);
+  if (arg[0]==NULL)
+    printf("Date: %d/%d/%d Time: %d:%d:%d\n", date->tm_mday, date->tm_mon, date->tm_year+1900, date->tm_hour, date->tm_min, date->tm_sec);
+  else if (!strcmp(arg[0], "-d"))
+    printf("Date: %d/%d/%d\n", date->tm_mday, date->tm_mon, date->tm_year+1900);
+  else if (!strcmp(arg[0], "-t"))
+    printf("Time: %d:%d:%d\n", date->tm_hour, date->tm_min, date->tm_sec);
+}
 
+void Cmd_sysinfo(char * arg[]){
+    struct utsname s;
+    if(uname(&s)==-1){
+        perror("sysinfo");
+    }
+    else
+        printf("%s %s %s %s %s\n", s.sysname, s.nodename, s.machine, s.release, s.version);
+}
+
+void Cmd_help(char * arg[]){
+    printf(
+    "exit: exits the shell\n"
+    "bye: exits the shell\n"
+    "date [-d|-t]: shows present date and time\n"
+    "pid [-P]: shows the shell's PID)\n"
+    "authors [-l|-n]: shows shell authors names and logins\n"
+    "sysinfo: shows information on the machine\n"
+    "chdir [dir]: changes or shows the current working directory\n"
+    "open [file] [m1 m2...]: opens a file (cr, ap, ex, ro, rw, wo, tr) and adds to list; without args lists open files\n"
+    "close [df] [-f]: closes file descriptor df\n"
+    "listopen: lists the shell's open files\n"
+    "dup [df]: duplicates file descriptor df and adds it to the list of open files\n"
+    "lseek [df] [pos] [ref]: sets offset of df to pos (SEEK_SET, SEEK_CUR, SEEK_END)\n"
+    "readstr [df] [cont]: reads cont bytes from df and prints them on screen as a string\n"
+    "writestr [df] [str]: writes string str to open file df\n"
+    "makefile [name]: creates an empty file named name\n"
+    "makedir [nam]: creates a directory named nam\n"
+    "delete [name1 name2...]: deletes files, links, or empty directories\n"
+    "deltree [name1 name2...]: recursively deletes files, links, or non-empty directories\n"
+    "listfile [-long][-link][-acc] [nam1 nam2...]: gives info on filesystem objects\n"
+    "list [-reca][-recb][-hid][-long][-link][-acc] [name1 name2...]: lists directory contents\n"
+    )
+}
+
+void Cmd_mkdir(char * arg[]){
+    if (arg[0]==NULL){
+        printf("Impossible to create a directory, please insert a name\n");
+    }
+    else if (mkdir(arg[0], 0755)!=0){
+        perror("mkdir");
+    }
+}
+
+void Cmd_delete(char * arg[]){
+    if (arg[0]==NULL){
+        printf("Impossible to delete, please insert a name\n");
+    }
+    else if (unlink(arg[0])!=0 && rmdir(arg[0])!=0)
+        perror("delete");
+}
+
+void Cmd_makefile(char * arg[]){
+    if (arg[0]==NULL){
+        printf("Impossible to create a file, please insert a name\n");
+    }
+    else if (open(arg[0], O_CREAT | O_WRONLY, 0777)==-1){
+        perror("makefile");
+    }
+}
+
+void Cmd_deltree(char * arg[]){
+    DIR *d;
+    struct dirent *entry;
+    if (arg[0]==NULL){
+        printf("Impossible to delete, please insert a name\n");
+        return;
+    }
+    if (unlink(arg[0])==0){
+        return;
+    }
+    else{
+        d = opendir(arg[0]);
+        if (d==NULL){
+            perror("deltree");
+            return;
+        }
+        else{
+            if (chdir(arg[0])!=0){
+                perror("chdir");
+                closedir(d);
+                return;
+            }
+            for (entry=readdir(d); entry!=NULL; entry=readdir(d)){
+                if (strcmp(entry->d_name, ".") !=0 && (strcmp(entry->d_name, ".."))!=0){
+                    char *sub[2];
+                    sub[0]=entry->d_name;
+                    sub[1]=NULL;
+                    Cmd_deltree (sub);
+                }
+            }
+            closedir(d);
+            chdir("..");
+
+            if (rmdir(arg[0])!=0)
+                perror("delete");
+
+        }
+    }
+    }
+
+void Cmd_pid (char * arg[])
+{
+    if (arg[0]==NULL)
+        printf ("El pid del proceso es %d\n",(int) getpid());
+    else
+        if (!strcmp (arg[0],"-p"))
+            printf ("El pid del proceso padre es %d\n",(int) getppid());
+}
+
+void Cmd_chdir (char * arg[])
+{
+   if (arg[0]==NULL)
+      MostrarDirActual();
+   else if (chdir(arg[0])==-1)
+      perror("Imposible cambiar directorio");
+}
 /**************************SHELL**************************/
 
 struct COMANDO {
