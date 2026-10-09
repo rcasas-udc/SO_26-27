@@ -532,16 +532,6 @@ void Cmd_listopen(char * arg[]){
     ListarAbiertos();
 }
 
-void Cmd_date(char * arg[]){
-  time_t t=time(NULL);
-  struct tm * date= localtime(&t);
-  if (arg[0]==NULL)
-    printf("Date: %d/%d/%d Time: %d:%d:%d\n", date->tm_mday, date->tm_mon, date->tm_year+1900, date->tm_hour, date->tm_min, date->tm_sec);
-  else if (!strcmp(arg[0], "-d"))
-    printf("Date: %d/%d/%d\n", date->tm_mday, date->tm_mon, date->tm_year+1900);
-  else if (!strcmp(arg[0], "-t"))
-    printf("Time: %d:%d:%d\n", date->tm_hour, date->tm_min, date->tm_sec);
-}
 
 void Cmd_sysinfo(char * arg[]){
     struct utsname s;
@@ -574,10 +564,10 @@ void Cmd_help(char * arg[]){
     "deltree [name1 name2...]: recursively deletes files, links, or non-empty directories\n"
     "listfile [-long][-link][-acc] [nam1 nam2...]: gives info on filesystem objects\n"
     "list [-reca][-recb][-hid][-long][-link][-acc] [name1 name2...]: lists directory contents\n"
-    )
+    );
 }
 
-void Cmd_mkdir(char * arg[]){
+void Cmd_makedir(char * arg[]){
     if (arg[0]==NULL){
         printf("Impossible to create a directory, please insert a name\n");
     }
@@ -654,10 +644,17 @@ void Cmd_pid (char * arg[])
 
 void Cmd_chdir (char * arg[])
 {
-   if (arg[0]==NULL)
-      MostrarDirActual();
-   else if (chdir(arg[0])==-1)
-      perror("Imposible cambiar directorio");
+    char dir[PATH_MAX];
+   if (arg[0]==NULL){
+      if ((getcwd(dir, sizeof(dir)))!=NULL){
+            printf("%s\n", dir);
+    }
+        else {
+            ErrorSis("Consultar directorio actual", NULL);
+        }
+   }
+    else if (chdir(arg[0])==-1)
+      ErrorSis("Imposible cambiar directorio", NULL);
 }
 /**************************SHELL**************************/
 
@@ -671,23 +668,21 @@ static struct COMANDO C[] = {
     {"date", Cmd_date},
     {"exit", Cmd_fin},
     {"bye", Cmd_fin},
-    {"pid", Cmd_pendiente},
-    {"sysinfo", Cmd_pendiente},
-    {"help", Cmd_pendiente},
-    {"chdir", Cmd_pendiente},
+    {"pid", Cmd_pid},
+    {"sysinfo", Cmd_sysinfo},
+    {"help", Cmd_help},
+    {"chdir", Cmd_chdir},
     {"open", Cmd_open},
     {"close", Cmd_close},
-    {"listopen", Cmd_pendiente},
+    {"listopen", Cmd_listopen},
     {"dup", Cmd_dup},
     {"lseek", Cmd_lseek},
     {"readstr", Cmd_readstr},
     {"writestr", Cmd_writestr},
-    {"makefile", Cmd_pendiente},
-    {"makedir", Cmd_pendiente},
-    {"delete", Cmd_pendiente},
-    {"deltree", Cmd_pendiente},
-    {"listfile", Cmd_pendiente},
-    {"list", Cmd_pendiente},
+    {"makefile", Cmd_makefile},
+    {"makedir", Cmd_makedir},
+    {"delete", Cmd_delete},
+    {"deltree", Cmd_deltree},
     {NULL, NULL}            /*NULL marca el final del array*/
 };
 
