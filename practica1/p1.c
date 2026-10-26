@@ -1,7 +1,7 @@
 /*
- * Sistemas Operativos - Practica 1
+ * Operating Systems - Lab Assignment 1
  *
- * Autores:
+ * Authors:
  *   Francisco Martínez Rubido    login: f.martinezr@udc.es
  *   Román Casas Riveira          login: r.casas@udc.es
  */
@@ -35,7 +35,7 @@ struct fichero {
 struct fichero *lista = NULL;
 
 
-// mete el fichero en la lista ordenado por df, si ya estaba lo actualiza
+// inserts the file into the list ordered by df; if it was already there, updates it
 int AnadirFichero(int df, int modo, char *nombre)
 {
     struct fichero *ant = NULL, *p = lista, *nuevo;
@@ -135,7 +135,7 @@ void ModoATexto(int modo, char *texto)
     if (modo & O_NONBLOCK) strcat(texto, " O_NONBLOCK");
 }
 
-// saca el nombre real de /proc, si no se puede pone uno generico
+// gets the real name from /proc; if that is not possible, uses a generic one
 void NombreDescriptor(int df, char *nombre, int tam)
 {
     char ruta[64];
@@ -149,13 +149,13 @@ void NombreDescriptor(int df, char *nombre, int tam)
     }
 
     if (df == 0)
-        strcpy(nombre, "entrada estandar");
+        strcpy(nombre, "standard input");
     else if (df == 1)
-        strcpy(nombre, "salida estandar");
+        strcpy(nombre, "standard output");
     else if (df == 2)
-        strcpy(nombre, "error estandar");
+        strcpy(nombre, "standard error");
     else
-        snprintf(nombre, tam, "descriptor heredado %d", df);
+        snprintf(nombre, tam, "inherited descriptor %d", df);
 }
 
 void CargarHeredados()
@@ -170,7 +170,7 @@ void CargarHeredados()
     for (df = 0; df < max; df++) {
         modo = fcntl(df, F_GETFL);
         if (modo == -1)
-            continue;   // no esta abierto
+            continue;   // not open
         NombreDescriptor(df, nombre, sizeof(nombre));
         AnadirFichero(df, modo, nombre);
     }
@@ -183,8 +183,8 @@ void ListarAbiertos()
     int modo;
 
     for (p = lista; p != NULL; p = p->sig) {
-        // el modo actual se pide a fcntl para que salga igual que en lsof,
-        // pero O_CREAT, O_EXCL y O_TRUNC solo los sabemos de cuando se abrio
+        // the current mode is requested from fcntl so it matches lsof,
+        // but O_CREAT, O_EXCL and O_TRUNC are only known from when it was opened
         modo = fcntl(p->df, F_GETFL);
         if (modo == -1)
             modo = p->modo;
@@ -195,18 +195,18 @@ void ListarAbiertos()
     }
 }
 
-// para los errores de llamadas al sistema, objeto puede ser NULL
-void ErrorSis(char *accion, char *objeto)
+// for system call errors, objeto can be NULL
+void ErrorSis(const char *accion, const char *objeto)
 {
     int err = errno;
 
     if (objeto != NULL)
-        printf("Imposible %s %s: %s\n", accion, objeto, strerror(err));
+        printf("Cannot %s %s: %s\n", accion, objeto, strerror(err));
     else
-        printf("Imposible %s: %s\n", accion, strerror(err));
+        printf("Cannot %s: %s\n", accion, strerror(err));
 }
 
-// pasa la cadena a descriptor, devuelve -1 si no es un numero valido
+// converts the string to a descriptor, returns -1 if it is not a valid number
 int LeerDf(char *s, int *df)
 {
     char *fin;
@@ -230,8 +230,19 @@ int NumArgs(char *arg[])
 }
 
 
-/*************COMANDOS DEL SHELL************************/
-/* todos reciben los trozos sin el nombre del comando: arg[0] es el primer argumento */
+// the path is allocated with malloc so there is no length limit during recursion
+char *UnirRuta(const char *dir, const char *nombre)
+{
+    size_t lon = strlen(dir) + strlen(nombre) + 2;
+    char *ruta = malloc(lon);
+
+    if (ruta != NULL)
+        snprintf(ruta, lon, "%s/%s", dir, nombre);
+    return ruta;
+}
+
+/*************SHELL COMMANDS************************/
+/* all of them receive the pieces without the command name: arg[0] is the first argument */
 
 void Cmd_fin(char *arg[])
 {
@@ -251,7 +262,7 @@ void Cmd_authors(char *arg[])
         else if (!strcmp(arg[0], "-n"))
             log = 0;
         else {
-            printf("Opcion no valida: %s\n", arg[0]);
+            printf("Invalid option: %s\n", arg[0]);
             return;
         }
     }
@@ -279,12 +290,12 @@ void Cmd_date(char *arg[])
         else if (!strcmp(arg[0], "-t"))
             fecha = 0;
         else {
-            printf("Opcion no valida: %s\n", arg[0]);
+            printf("Invalid option: %s\n", arg[0]);
             return;
         }
     }
     if (t == NULL) {
-        printf("Imposible obtener la fecha\n");
+        printf("Cannot get the date\n");
         return;
     }
 
@@ -323,22 +334,22 @@ void Cmd_open(char *arg[])
         else if (!strcmp(arg[i], "tr"))
             modo |= O_TRUNC;
         else {
-            printf("Modo no valido: %s\n", arg[i]);
+            printf("Invalid mode: %s\n", arg[i]);
             return;
         }
     }
 
     df = open(arg[0], modo, 0777);
     if (df == -1) {
-        ErrorSis("abrir", arg[0]);
+        ErrorSis("open", arg[0]);
         return;
     }
     if (AnadirFichero(df, modo, arg[0]) == -1) {
-        printf("Imposible anadir %s a la lista: memoria insuficiente\n", arg[0]);
+        printf("Cannot add %s to the list: not enough memory\n", arg[0]);
         close(df);
         return;
     }
-    printf("Anadida entrada %d a la tabla ficheros abiertos\n", df);
+    printf("Added entry %d to the open files table\n", df);
 }
 
 void Cmd_close(char *arg[])
@@ -346,13 +357,11 @@ void Cmd_close(char *arg[])
     int i, df;
     char *num = NULL;
 
-    // vale "close df", "close df -f" y "close -f df"
-    // -f de momento no hace nada distinto porque aun no hay mapeos
     for (i = 0; arg[i] != NULL; i++) {
         if (!strcmp(arg[i], "-f"))
             continue;
         if (num != NULL || LeerDf(arg[i], &df) == -1) {
-            printf("Uso: close df [-f]\n");
+            printf("Usage: close df [-f]\n");
             return;
         }
         num = arg[i];
@@ -362,9 +371,9 @@ void Cmd_close(char *arg[])
         return;
     }
 
-    fflush(stdout);   // por si cerramos la salida estandar
+    fflush(stdout);   // in case we close the standard output
     if (close(df) == -1) {
-        ErrorSis("cerrar el descriptor", num);
+        ErrorSis("close descriptor", num);
         return;
     }
     EliminarFichero(df);
@@ -382,13 +391,13 @@ void Cmd_dup(char *arg[])
     }
 
     if (LeerDf(arg[0], &df) == -1) {
-        printf("Descriptor no valido: %s\n", arg[0]);
+        printf("Invalid descriptor: %s\n", arg[0]);
         return;
     }
 
     fflush(stdout);
     if ((nuevo = dup(df)) == -1) {
-        ErrorSis("duplicar el descriptor", arg[0]);
+        ErrorSis("duplicate descriptor", arg[0]);
         return;
     }
 
@@ -403,11 +412,11 @@ void Cmd_dup(char *arg[])
         modo |= orig->modo & (O_CREAT | O_EXCL | O_TRUNC);
 
     if (AnadirFichero(nuevo, modo, nombre) == -1) {
-        printf("Imposible anadir el duplicado a la lista: memoria insuficiente\n");
+        printf("Cannot add the duplicate to the list: not enough memory\n");
         close(nuevo);
         return;
     }
-    printf("Anadida entrada %d a la tabla ficheros abiertos\n", nuevo);
+    printf("Added entry %d to the open files table\n", nuevo);
 }
 
 void Cmd_lseek(char *arg[])
@@ -417,18 +426,18 @@ void Cmd_lseek(char *arg[])
     char *fin;
 
     if (NumArgs(arg) != 3) {
-        printf("Uso: lseek df pos SEEK_SET|SEEK_CUR|SEEK_END\n");
+        printf("Usage: lseek df pos SEEK_SET|SEEK_CUR|SEEK_END\n");
         return;
     }
     if (LeerDf(arg[0], &df) == -1) {
-        printf("Descriptor no valido: %s\n", arg[0]);
+        printf("Invalid descriptor: %s\n", arg[0]);
         return;
     }
 
     errno = 0;
     pos = strtoll(arg[1], &fin, 10);
     if (errno != 0 || *fin != '\0') {
-        printf("Posicion no valida: %s\n", arg[1]);
+        printf("Invalid position: %s\n", arg[1]);
         return;
     }
 
@@ -439,15 +448,15 @@ void Cmd_lseek(char *arg[])
     else if (!strcmp(arg[2], "SEEK_END"))
         ref = SEEK_END;
     else {
-        printf("Referencia no valida: %s (usar SEEK_SET, SEEK_CUR o SEEK_END)\n", arg[2]);
+        printf("Invalid reference: %s (use SEEK_SET, SEEK_CUR or SEEK_END)\n", arg[2]);
         return;
     }
 
     res = lseek(df, pos, ref);
     if (res == -1)
-        ErrorSis("posicionar el descriptor", arg[0]);
+        ErrorSis("seek descriptor", arg[0]);
     else
-        printf("Nuevo offset: %lld\n", (long long) res);
+        printf("New offset: %lld\n", (long long) res);
 }
 
 void Cmd_readstr(char *arg[])
@@ -458,36 +467,36 @@ void Cmd_readstr(char *arg[])
     char *fin, *buf;
 
     if (NumArgs(arg) != 2) {
-        printf("Uso: readstr df cont\n");
+        printf("Usage: readstr df cont\n");
         return;
     }
     if (LeerDf(arg[0], &df) == -1) {
-        printf("Descriptor no valido: %s\n", arg[0]);
+        printf("Invalid descriptor: %s\n", arg[0]);
         return;
     }
 
     errno = 0;
     cont = strtol(arg[1], &fin, 10);
     if (errno != 0 || *fin != '\0' || cont < 0 || cont >= SSIZE_MAX) {
-        printf("Numero de bytes no valido: %s\n", arg[1]);
+        printf("Invalid number of bytes: %s\n", arg[1]);
         return;
     }
 
-    buf = malloc(cont + 1);   // +1 para el '\0'
+    buf = malloc(cont + 1);   // +1 for the '\0'
     if (buf == NULL) {
-        printf("Imposible reservar %ld bytes\n", cont);
+        printf("Cannot allocate %ld bytes\n", cont);
         return;
     }
 
     leidos = read(df, buf, cont);
     if (leidos == -1) {
-        ErrorSis("leer del descriptor", arg[0]);
+        ErrorSis("read from descriptor", arg[0]);
         free(buf);
         return;
     }
     buf[leidos] = '\0';
     printf("%s\n", buf);
-    printf("Leidos %ld bytes del descriptor %d\n", (long) leidos, df);
+    printf("Read %ld bytes from descriptor %d\n", (long) leidos, df);
     free(buf);
 }
 
@@ -498,20 +507,20 @@ void Cmd_writestr(char *arg[])
     char *cad;
 
     if (NumArgs(arg) < 2) {
-        printf("Uso: writestr df str\n");
+        printf("Usage: writestr df str\n");
         return;
     }
     if (LeerDf(arg[0], &df) == -1) {
-        printf("Descriptor no valido: %s\n", arg[0]);
+        printf("Invalid descriptor: %s\n", arg[0]);
         return;
     }
 
-    // strtok separa por espacios, asi que hay que volver a juntar los trozos
+    // strtok splits on spaces, so the pieces have to be joined again
     for (i = 1; arg[i] != NULL; i++)
         tam += strlen(arg[i]) + 1;
     cad = malloc(tam);
     if (cad == NULL) {
-        printf("Imposible reservar memoria\n");
+        printf("Cannot allocate memory\n");
         return;
     }
     strcpy(cad, arg[1]);
@@ -522,9 +531,9 @@ void Cmd_writestr(char *arg[])
 
     escritos = write(df, cad, strlen(cad));
     if (escritos == -1)
-        ErrorSis("escribir en el descriptor", arg[0]);
+        ErrorSis("write to descriptor", arg[0]);
     else
-        printf("Escritos %ld bytes en el descriptor %d\n", (long) escritos, df);
+        printf("Wrote %ld bytes to descriptor %d\n", (long) escritos, df);
     free(cad);
 }
 
@@ -542,104 +551,219 @@ void Cmd_sysinfo(char * arg[]){
         printf("%s %s %s %s %s\n", s.sysname, s.nodename, s.machine, s.release, s.version);
 }
 
+// help texts, one entry per command
+typedef struct {
+    const char *nombre;
+    const char *uso;
+    const char *descripcion;
+} Ayuda;
+
+static const Ayuda AYUDAS[] = {
+    {"authors", "authors [-l|-n]",
+     "shows the shell's authors (names and logins)\n"
+     "\t-l: shows only the logins\n"
+     "\t-n: shows only the names"},
+    {"pid", "pid [-p]",
+     "shows ths shell's pid\n"
+     "\t-p: shows the pid of the shell's parent process"},
+    {"date", "date [-d|-t]",
+     "shows the current date and time.\n"
+     "\t-d: shows only the date (DD/MM/AAAA)\n"
+     "\t-t: shows only the time (hh:mm:ss)"},
+    {"sysinfo", "sysinfo",
+     "shows information about the machine running the shell (like uname -a)"},
+    {"help", "help [cmd]",
+     "lists the available commands. help cmd shows help for the cmd command"},
+    {"exit", "exit", "terminates the shell's execution"},
+    {"bye", "bye", "terminates the shell's execution"},
+    {"chdir", "chdir [dir]",
+     "changes the shell's working directory to dir.\n"
+     "Without arguments it shows the current working directory"},
+    {"open", "open [fich] [m1] [m2] ...",
+     "opens the file fich and adds it to the list of open files in the shell.\n"
+     "Modes: cr: O_CREAT, ap: O_APPEND, ex: O_EXCL, ro: O_RDONLY,\n"
+     "       rw: O_RDWR, wo: O_WRONLY, tr: O_TRUNC\n"
+     "Without arguments it lists the open files in the shell"},
+    {"close", "close df [-f]",
+     "closes the file descriptor df, and eliminates the corresponding list entry\n"
+     "\t-f: closes even if df corresponds to an active mapping"},
+    {"listopen", "listopen",
+     "lists the open files in the shell (descriptor, name and mode)"},
+    {"dup", "dup df",
+     "duplicates the file descriptor df and adds the new descriptor to the list of open files"},
+    {"lseek", "lseek df pos ref",
+     "positions the offset if file descriptor to pos. ref is the reference and can be:\n"
+     "\tSEEK_SET: pos is relative to the beginning of the file\n"
+     "\tSEEK_CUR: pos is relative to the current position\n"
+     "\tSEEK_END: pos is relative to the end of the file"},
+    {"readstr", "readstr df cont",
+     "reads cont bytes from the file descriptor df and displays them on screen as a string"},
+    {"writestr", "writestr df str",
+     "writes the string str to the file opened with descriptor df"},
+    {"makefile", "makefile nombre",
+     "creates an empty file with the name nombre"},
+    {"makedir", "makedir nombre",
+     "creates a directory with the name nombre"},
+    {"delete", "delete n1 n2 ...",
+     "deletes the files, links and/or empty directories n1, n2 ..."},
+    {"deltree", "deltree n1 n2 ...",
+     "deletes the files, links and/or directories n1, n2 ...\n"
+     "If a directory is not empty, it is deleted along with all its content"},
+    {"listfile", "listfile [-long] [-link] [-acc] n1 n2 ...",
+     "Displays information about the file system objects n1, n2 ...\n"
+     "If a name is a directory, information about the directory itself is displayed.\n"
+     "By default, only the name and size are shown.\n"
+     "\t-long: long listing (date, links, inode, owner, group, mode)\n"
+     "\t-link: if it is a symbolic link, also shows where it points\n"
+     "\t-acc:  uses the last access date"},
+    {"list", "list [-reca] [-recb] [-hid] [-long] [-link] [-acc] n1 n2 ...",
+     "Similar to listfile, but if a name is a directory, its content is listed.\n"
+     "\t-hid:  lists also the hidden files\n"
+     "\t-reca: recursive; the recursion is done AFTER listing the directory\n"
+     "\t-recb: recursive; the recursion is done BEFORE listing the directory\n"
+     "\t-long, -link, -acc: as in listfile"},
+};
+
+#define NUM_AYUDAS ((int)(sizeof(AYUDAS) / sizeof(AYUDAS[0])))
+
 void Cmd_help(char * arg[]){
-    printf(
-    "exit: exits the shell\n"
-    "bye: exits the shell\n"
-    "date [-d|-t]: shows present date and time\n"
-    "pid [-P]: shows the shell's PID)\n"
-    "authors [-l|-n]: shows shell authors names and logins\n"
-    "sysinfo: shows information on the machine\n"
-    "chdir [dir]: changes or shows the current working directory\n"
-    "open [file] [m1 m2...]: opens a file (cr, ap, ex, ro, rw, wo, tr) and adds to list; without args lists open files\n"
-    "close [df] [-f]: closes file descriptor df\n"
-    "listopen: lists the shell's open files\n"
-    "dup [df]: duplicates file descriptor df and adds it to the list of open files\n"
-    "lseek [df] [pos] [ref]: sets offset of df to pos (SEEK_SET, SEEK_CUR, SEEK_END)\n"
-    "readstr [df] [cont]: reads cont bytes from df and prints them on screen as a string\n"
-    "writestr [df] [str]: writes string str to open file df\n"
-    "makefile [name]: creates an empty file named name\n"
-    "makedir [nam]: creates a directory named nam\n"
-    "delete [name1 name2...]: deletes files, links, or empty directories\n"
-    "deltree [name1 name2...]: recursively deletes files, links, or non-empty directories\n"
-    "listfile [-long][-link][-acc] [nam1 nam2...]: gives info on filesystem objects\n"
-    "list [-reca][-recb][-hid][-long][-link][-acc] [name1 name2...]: lists directory contents\n"
-    );
+    int i;
+
+    if (arg[0] == NULL) {
+        printf("Available commands:\n");
+        for (i = 0; i < NUM_AYUDAS; i++)
+            printf("%s ", AYUDAS[i].nombre);
+        printf("\n");
+        return;
+    }
+    for (i = 0; i < NUM_AYUDAS; i++)
+        if (!strcmp(AYUDAS[i].nombre, arg[0])) {
+            printf("%s\t%s\n", AYUDAS[i].uso, AYUDAS[i].descripcion);
+            return;
+        }
+    printf("%s not found\n", arg[0]);
 }
 
 void Cmd_makedir(char * arg[]){
+    int i;
+
     if (arg[0]==NULL){
-        printf("Impossible to create a directory, please insert a name\n");
+        printf("Cannot create a directory, please insert a name\n");
+        return;
     }
-    else if (mkdir(arg[0], 0755)!=0){
-        perror("mkdir");
+    for (i = 0; arg[i] != NULL; i++)
+        if (mkdir(arg[i], 0755)!=0)
+            ErrorSis("create directory", arg[i]);
+}
+
+// the type is checked with lstat, as the assignment requires, so links are not followed:
+// that way a link to a directory is removed with unlink and the directory is left untouched
+int BorrarObjeto(char *nombre)
+{
+    struct stat st;
+
+    if (lstat(nombre, &st) == -1) {
+        ErrorSis("access", nombre);
+        return -1;
     }
+    if (S_ISDIR(st.st_mode)) {
+        if (rmdir(nombre) == -1) {
+            ErrorSis("delete directory", nombre);
+            return -1;
+        }
+    } else if (unlink(nombre) == -1) {
+        ErrorSis("delete", nombre);
+        return -1;
+    }
+    return 0;
 }
 
 void Cmd_delete(char * arg[]){
+    int i;
+
     if (arg[0]==NULL){
-        printf("Impossible to delete, please insert a name\n");
+        printf("Cannot delete, please insert a name\n");
+        return;
     }
-    else if (unlink(arg[0])!=0 && rmdir(arg[0])!=0)
-        perror("delete");
+    for (i = 0; arg[i] != NULL; i++)
+        BorrarObjeto(arg[i]);
 }
 
 void Cmd_makefile(char * arg[]){
+    int df;
+
     if (arg[0]==NULL){
-        printf("Impossible to create a file, please insert a name\n");
+        printf("Cannot create a file, please insert a name\n");
+        return;
     }
-    else if (open(arg[0], O_CREAT | O_WRONLY, 0777)==-1){
-        perror("makefile");
+    df = open(arg[0], O_CREAT | O_WRONLY, 0777);
+    if (df == -1)
+        ErrorSis("create file", arg[0]);
+    else
+        close(df);   // if it stayed open it would not be in the list and would not match lsof
+}
+
+// full paths are used instead of chdir so that, if something
+// fails halfway, the shell is not left in another directory
+int BorrarArbol(char *nombre)
+{
+    struct stat st;
+    DIR *d;
+    struct dirent *ent;
+    char *ruta;
+    int res = 0;
+
+    if (lstat(nombre, &st) == -1) {
+        ErrorSis("access", nombre);
+        return -1;
     }
+    if (!S_ISDIR(st.st_mode))
+        return BorrarObjeto(nombre);
+
+    if ((d = opendir(nombre)) == NULL) {
+        ErrorSis("open directory", nombre);
+        return -1;
+    }
+    while ((ent = readdir(d)) != NULL) {
+        if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, ".."))
+            continue;
+        if ((ruta = UnirRuta(nombre, ent->d_name)) == NULL) {
+            printf("Cannot allocate memory\n");
+            res = -1;
+            break;
+        }
+        if (BorrarArbol(ruta) == -1)
+            res = -1;
+        free(ruta);
+    }
+    closedir(d);
+
+    // if it could not be emptied, rmdir would fail and repeat the error
+    if (res == -1)
+        return -1;
+    return BorrarObjeto(nombre);
 }
 
 void Cmd_deltree(char * arg[]){
-    DIR *d;
-    struct dirent *entry;
+    int i;
+
     if (arg[0]==NULL){
-        printf("Impossible to delete, please insert a name\n");
+        printf("Cannot delete, please insert a name\n");
         return;
     }
-    if (unlink(arg[0])==0){
-        return;
-    }
-    else{
-        d = opendir(arg[0]);
-        if (d==NULL){
-            perror("deltree");
-            return;
-        }
-        else{
-            if (chdir(arg[0])!=0){
-                perror("chdir");
-                closedir(d);
-                return;
-            }
-            for (entry=readdir(d); entry!=NULL; entry=readdir(d)){
-                if (strcmp(entry->d_name, ".") !=0 && (strcmp(entry->d_name, ".."))!=0){
-                    char *sub[2];
-                    sub[0]=entry->d_name;
-                    sub[1]=NULL;
-                    Cmd_deltree (sub);
-                }
-            }
-            closedir(d);
-            chdir("..");
-
-            if (rmdir(arg[0])!=0)
-                perror("delete");
-
-        }
-    }
-    }
+    for (i = 0; arg[i] != NULL; i++)
+        BorrarArbol(arg[i]);
+}
 
 void Cmd_pid (char * arg[])
 {
     if (arg[0]==NULL)
-        printf ("El pid del proceso es %d\n",(int) getpid());
+        printf ("Shell pid: %d\n",(int) getpid());
     else
         if (!strcmp (arg[0],"-p"))
-            printf ("El pid del proceso padre es %d\n",(int) getppid());
+            printf ("Shell parent pid: %d\n",(int) getppid());
+        else
+            printf ("Invalid option: %s\n", arg[0]);
 }
 
 void Cmd_chdir (char * arg[])
@@ -650,12 +774,244 @@ void Cmd_chdir (char * arg[])
             printf("%s\n", dir);
     }
         else {
-            ErrorSis("Consultar directorio actual", NULL);
+            ErrorSis("get current directory", NULL);
         }
    }
     else if (chdir(arg[0])==-1)
-      ErrorSis("Imposible cambiar directorio", NULL);
+      ErrorSis("change to directory", arg[0]);
 }
+
+void MostrarDirActual()
+{
+    char dir[PATH_MAX];
+
+    if (getcwd(dir, sizeof(dir)) == NULL)
+        ErrorSis("get current directory", NULL);
+    else
+        printf("%s\n", dir);
+}
+
+#define REC_NO      0
+#define REC_DESPUES 1
+#define REC_ANTES   2
+
+struct OPCIONES {
+    int largo;
+    int enlace;
+    int acceso;
+    int ocultos;
+    int recursion;
+};
+
+char LetraTipo(mode_t m)
+{
+    if (S_ISREG(m))  return '-';
+    if (S_ISDIR(m))  return 'd';
+    if (S_ISLNK(m))  return 'l';
+    if (S_ISCHR(m))  return 'c';
+    if (S_ISBLK(m))  return 'b';
+    if (S_ISFIFO(m)) return 'p';
+    if (S_ISSOCK(m)) return 's';
+    return '?';
+}
+
+void CadenaPermisos(mode_t m, char *p)
+{
+    p[0] = LetraTipo(m);
+    p[1] = (m & S_IRUSR) ? 'r' : '-';
+    p[2] = (m & S_IWUSR) ? 'w' : '-';
+    p[3] = (m & S_IXUSR) ? 'x' : '-';
+    p[4] = (m & S_IRGRP) ? 'r' : '-';
+    p[5] = (m & S_IWGRP) ? 'w' : '-';
+    p[6] = (m & S_IXGRP) ? 'x' : '-';
+    p[7] = (m & S_IROTH) ? 'r' : '-';
+    p[8] = (m & S_IWOTH) ? 'w' : '-';
+    p[9] = (m & S_IXOTH) ? 'x' : '-';
+    if (m & S_ISUID) p[3] = (m & S_IXUSR) ? 's' : 'S';
+    if (m & S_ISGID) p[6] = (m & S_IXGRP) ? 's' : 'S';
+    if (m & S_ISVTX) p[9] = (m & S_IXOTH) ? 't' : 'T';
+    p[10] = '\0';
+}
+
+// path and name are received separately because when listing a directory
+// lstat needs the full path but only the name is shown
+void ImprimirInfo(const char *ruta, const char *nombre, struct OPCIONES *op)
+{
+    struct stat st;
+    struct passwd *pw;
+    struct group *gr;
+    struct tm *t;
+    time_t fecha;
+    char textoFecha[32], usuario[64], grupo[64], permisos[11], destino[PATH_MAX];
+    ssize_t lon;
+
+    if (lstat(ruta, &st) == -1) {
+        ErrorSis("access", ruta);
+        return;
+    }
+    // the date is also computed without -long because the reference shell
+    // shows the access date in the short listing when -acc is given
+    if (op->largo || op->acceso) {
+        // stat does not store a creation date, so the modification date is used, like ls -l
+        fecha = op->acceso ? st.st_atime : st.st_mtime;
+        if ((t = localtime(&fecha)) != NULL)
+            strftime(textoFecha, sizeof(textoFecha), "%Y/%m/%d-%H:%M", t);
+        else
+            snprintf(textoFecha, sizeof(textoFecha), "unknown date");
+    }
+
+    if (op->largo) {
+        // if the user or group no longer exists they return NULL and the number is shown
+        if ((pw = getpwuid(st.st_uid)) != NULL)
+            snprintf(usuario, sizeof(usuario), "%s", pw->pw_name);
+        else
+            snprintf(usuario, sizeof(usuario), "%lu", (unsigned long) st.st_uid);
+        if ((gr = getgrgid(st.st_gid)) != NULL)
+            snprintf(grupo, sizeof(grupo), "%s", gr->gr_name);
+        else
+            snprintf(grupo, sizeof(grupo), "%lu", (unsigned long) st.st_gid);
+
+        CadenaPermisos(st.st_mode, permisos);
+        printf("%s %3lu (%8lu) %8s %8s %s %10lld %s",
+               textoFecha, (unsigned long) st.st_nlink, (unsigned long) st.st_ino,
+               usuario, grupo, permisos, (long long) st.st_size, nombre);
+    } else if (op->acceso)
+        printf("%10lld  %s %s", (long long) st.st_size, textoFecha, nombre);
+    else
+        printf("%10lld  %s", (long long) st.st_size, nombre);
+
+    if (op->enlace && S_ISLNK(st.st_mode))
+        if ((lon = readlink(ruta, destino, sizeof(destino) - 1)) != -1) {
+            destino[lon] = '\0';   // readlink does not add the '\0' at the end
+            printf(" -> %s", destino);
+        }
+    printf("\n");
+}
+
+// ListarContenido and RecorrerSubdirectorios call each other
+void ListarContenido(const char *dir, struct OPCIONES *op);
+
+void ListarDirectorio(const char *dir, struct OPCIONES *op)
+{
+    DIR *d;
+    struct dirent *ent;
+    char *ruta;
+
+    if ((d = opendir(dir)) == NULL) {
+        ErrorSis("open directory", dir);
+        return;
+    }
+    printf("************%s\n", dir);
+    while ((ent = readdir(d)) != NULL) {
+        if (!op->ocultos && ent->d_name[0] == '.')
+            continue;
+        if ((ruta = UnirRuta(dir, ent->d_name)) == NULL) {
+            printf("Cannot allocate memory\n");
+            break;
+        }
+        ImprimirInfo(ruta, ent->d_name, op);
+        free(ruta);
+    }
+    closedir(d);
+}
+
+void RecorrerSubdirectorios(const char *dir, struct OPCIONES *op)
+{
+    DIR *d;
+    struct dirent *ent;
+    struct stat st;
+    char *ruta;
+
+    if ((d = opendir(dir)) == NULL)
+        return;   // the error is already shown by ListarDirectorio
+    while ((ent = readdir(d)) != NULL) {
+        // even with -hid, entering . or .. would make the recursion infinite
+        if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, ".."))
+            continue;
+        if (!op->ocultos && ent->d_name[0] == '.')
+            continue;
+        if ((ruta = UnirRuta(dir, ent->d_name)) == NULL) {
+            printf("Cannot allocate memory\n");
+            break;
+        }
+        // lstat and not d_type because the assignment requires it, and not stat so as not
+        // to follow links to directories, which could form cycles
+        if (lstat(ruta, &st) == 0 && S_ISDIR(st.st_mode))
+            ListarContenido(ruta, op);
+        free(ruta);
+    }
+    closedir(d);
+}
+
+void ListarContenido(const char *dir, struct OPCIONES *op)
+{
+    if (op->recursion == REC_ANTES)
+        RecorrerSubdirectorios(dir, op);
+    ListarDirectorio(dir, op);
+    if (op->recursion == REC_DESPUES)
+        RecorrerSubdirectorios(dir, op);
+}
+
+// esList because -hid, -reca and -recb are only valid for list
+int LeerOpciones(char *arg[], int esList, struct OPCIONES *op)
+{
+    int i;
+
+    memset(op, 0, sizeof(struct OPCIONES));
+    for (i = 0; arg[i] != NULL; i++) {
+        if (!strcmp(arg[i], "-long"))
+            op->largo = 1;
+        else if (!strcmp(arg[i], "-link"))
+            op->enlace = 1;
+        else if (!strcmp(arg[i], "-acc"))
+            op->acceso = 1;
+        else if (esList && !strcmp(arg[i], "-hid"))
+            op->ocultos = 1;
+        else if (esList && !strcmp(arg[i], "-reca"))
+            op->recursion = REC_DESPUES;
+        else if (esList && !strcmp(arg[i], "-recb"))
+            op->recursion = REC_ANTES;
+        else
+            break;
+    }
+    return i;
+}
+
+void Cmd_listfile(char *arg[])
+{
+    struct OPCIONES op;
+    int i = LeerOpciones(arg, 0, &op);
+
+    if (arg[i] == NULL) {
+        MostrarDirActual();
+        return;
+    }
+    for (; arg[i] != NULL; i++)
+        ImprimirInfo(arg[i], arg[i], &op);
+}
+
+void Cmd_list(char *arg[])
+{
+    struct OPCIONES op;
+    struct stat st;
+    int i = LeerOpciones(arg, 1, &op);
+
+    if (arg[i] == NULL) {
+        MostrarDirActual();
+        return;
+    }
+    for (; arg[i] != NULL; i++) {
+        if (lstat(arg[i], &st) == -1) {
+            ErrorSis("access", arg[i]);
+            continue;
+        }
+        if (S_ISDIR(st.st_mode))
+            ListarContenido(arg[i], &op);
+        else
+            ImprimirInfo(arg[i], arg[i], &op);
+    }
+}
+
 /**************************SHELL**************************/
 
 struct COMANDO {
@@ -683,7 +1039,9 @@ static struct COMANDO C[] = {
     {"makedir", Cmd_makedir},
     {"delete", Cmd_delete},
     {"deltree", Cmd_deltree},
-    {NULL, NULL}            /*NULL marca el final del array*/
+    {"listfile", Cmd_listfile},
+    {"list", Cmd_list},
+    {NULL, NULL}            /*NULL marks the end of the array*/
 };
 
 void DecidirComando(char *tr[])
@@ -696,7 +1054,7 @@ void DecidirComando(char *tr[])
             (*C[i].funcion)(tr + 1);
             return;
         }
-    printf("%s: comando no encontrado\n", tr[0]);
+    printf("%s: command not found\n", tr[0]);
 }
 
 int TrocearCadena(char *cadena, char *trozos[])
@@ -714,7 +1072,7 @@ void ProcesarEntrada(char *entrada)
 {
     char *tr[MAXENTRADA / 2];
 
-    if (TrocearCadena(entrada, tr) == 0)    /*no hay nada*/
+    if (TrocearCadena(entrada, tr) == 0)    /*nothing to do*/
         return;
     DecidirComando(tr);
 }
