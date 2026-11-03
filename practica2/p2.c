@@ -22,8 +22,32 @@
 #include <sys/stat.h>
 #include <pwd.h>
 #include <grp.h>
+#include <sys/shm.h>
+#include <sys/ipc.h>
 
 #define MAXENTRADA 2048
+
+typedef enum{
+    MALLOC_MEM, SHARED_MEM, MMAP_MEM
+} memType;
+
+typedef struct node{
+    void *address;
+    key_t key;
+    size_t size;
+    memType type;
+    char *filename;
+    int df;
+    struct node *prev;
+    struct node *next;
+} node;
+
+typedef struct tList{
+    node *head;
+    node *tail;
+}tList;
+
+tList list;
 
 struct fichero {
     int df;
@@ -1011,6 +1035,139 @@ void Cmd_list(char *arg[])
             ImprimirInfo(arg[i], arg[i], &op);
     }
 }
+
+bool isEmptyList(tList *list){
+    if (list->head==NULL){
+        return true;
+    }
+    else
+        return false;
+}
+
+void AddMemList(tList *list, void *p, size_t size, key_t key, memType type, int df, char *filename){
+    node *pos= malloc(sizeof(node));
+    pos->address=p;
+    pos->type=type;
+    pos->size=size;
+    pos->key=key;
+    pos->df=df;
+    if (filename != NULL){
+        pos->filename=strdup(filename);
+    }
+    if (isEmptyList(list)){
+        list->head=pos;
+        list->tail=pos;
+    }
+    else{
+        pos->prev=list->tail;
+        list->tail->next=pos;
+        list->tail=pos;
+    }
+}
+
+
+void MemoryList(tList *list){
+    node *pos=list->head;
+    while (pos!=NULL){
+        if (pos->filename != NULL){
+            printf("%p, %d, %zu, %d, %s",pos->address, pos->type, pos->size, pos->key, pos->filename);
+        }
+        else
+            printf("%p, %d, %zu, %d",pos->address, pos->type, pos->size, pos->key);
+        pos=pos->next;
+    }
+}
+
+void allocate(char *arg[]){
+    if (arg[0] != NULL){
+        if (strcmp(arg[0], "-malloc") == 0){
+            if (arg[1] != NULL){
+                size_t size = (size_t) strtoul(arg[1], NULL, 10);
+                void *p = malloc(size);
+                if (p==NULL){
+                    ErrorSis("Impossible to allocate", NULL);
+                }
+                else
+                    AddMemList(&list, p, size, 0, MALLOC_MEM, -1, NULL);
+            }
+        }
+        else if (strcmp(arg[0], "-createshared") == 0){
+            if (arg[1] != NULL && arg[2] != NULL){
+                key_t key = (key_t) strtoul(arg[1], NULL, 0);
+                size_t size = (size_t) strtoul(arg[2], NULL, 10);
+                int shmid = shmget(key, size, IPC_CREAT | IPC_EXCL | 0666);
+                if (shmid==-1){
+                    ErrorSis("Impossible to allocate", NULL);
+                }
+                else{
+                    void *p = shmat(shmid, NULL, 0);
+                    if (p == (void *)-1){
+                        ErrorSis("Impossible to allocate", NULL);
+                    }
+                    else
+                        AddMemList(&list, p, size, key, SHARED_MEM, -1, NULL);
+                }
+            }
+        }
+        else if (strcmp(arg[0], "-shared")==0){
+            if (arg[1] != NULL){
+                key_t key = (key_t) strtoul(arg[1], NULL, 0);
+                int shmid = shmget(key, 0, 0666);
+                if (shmid==-1){
+                ErrorSis("Impossible to allocate", NULL);
+                }
+                else{
+                    void *p = shmat(shmid, NULL, 0);
+                    struct shmid_ds info;
+                    if (p == (void *)-1){
+                        ErrorSis("Impossible to allocate", NULL);
+                    }
+                    else if (shmctl(shmid, IPC_STAT, &info)==-1){
+                        ErrorSis("Impossible to get allocated memory information");
+                    }
+                    else
+                        AddMemList(&list, p, info.shm_segsz, key, SHARED_MEM, -1, NULL);
+                }
+            }
+        }
+        else if (strcmp(arg[0], "-mmap")==0){
+            if (arg[1]!=NULL){
+                struct stat st;
+                int df = open(arg[1], O_RDWR, 0777);
+                if (df==-1){
+                    ErrorSis("Impossible to get descriptor file", NULL);
+                }
+                else{
+                    if (fstat(df, &st) == 0){
+                        size_t size = st.st_size;
+                        if (arg[2] != NULL){
+                            int prot=0;
+                            if (arg[2][0] == 'r' || arg[2][1] == 'r'){
+                                prot|=PROT_READ;
+                            }
+                            if (arg[2][0] == 'w' || arg[2][1] == 'w'){
+                                prot|=PROT_WRITE;
+                            }
+                            void *p = mmap(NULL, size, prot, MAP_SHARED, df, 0);
+                            if (p == (void *) -1){
+                                close(df)
+                                ErrorSis("Impossible to allocate", NULL);
+                            }
+
+                            else
+                                AddMemList(&list, p, size, -1, MMAP_MEM, df, arg[1]);
+                        }
+                        else
+                            ErrorSis("The command requires another argument", NULL);
+                    }
+                    else
+                        ErrorSis("Impossible to get information from descriptor file", NULL)
+                }
+            }
+        }
+    }
+    else
+        MemoryList(&list);
 
 /**************************SHELL**************************/
 
