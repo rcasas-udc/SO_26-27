@@ -1182,9 +1182,8 @@ void allocate(char *arg[]){
             }
         }
     }
-}
-else
-    MemoryList(&list);
+    else
+        MemoryList(&list);
 }
 
 /**************************SHELL**************************/
