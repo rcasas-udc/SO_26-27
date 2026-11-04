@@ -1046,23 +1046,31 @@ bool isEmptyList(tList *list){
 
 void AddMemList(tList *list, void *p, size_t size, key_t key, memType type, int df, char *filename){
     node *pos= malloc(sizeof(node));
-    pos->address=p;
-    pos->type=type;
-    pos->size=size;
-    pos->key=key;
-    pos->df=df;
-    if (filename != NULL){
-        pos->filename=strdup(filename);
+    if (pos != NULL){
+        pos->address=p;
+        pos->type=type;
+        pos->size=size;
+        pos->key=key;
+        pos->df=df;
+        if (filename != NULL)
+            pos->filename=strdup(filename);
+        else
+            pos->filename=NULL;
+
+        pos->next=NULL;
+        if (isEmptyList(list)){
+            pos->prev=NULL;
+            list->head=pos;
+            list->tail=pos;
+        }
+        else{
+            pos->prev=list->tail;
+            list->tail->next=pos;
+            list->tail=pos;
+        }
     }
-    if (isEmptyList(list)){
-        list->head=pos;
-        list->tail=pos;
-    }
-    else{
-        pos->prev=list->tail;
-        list->tail->next=pos;
-        list->tail=pos;
-    }
+    else
+        ErrorSis("Impossible to add to memory list", NULL);
 }
 
 
@@ -1070,10 +1078,10 @@ void MemoryList(tList *list){
     node *pos=list->head;
     while (pos!=NULL){
         if (pos->filename != NULL){
-            printf("%p, %d, %zu, %d, %s",pos->address, pos->type, pos->size, pos->key, pos->filename);
+            printf("%p, %d, %zu, %d, %s\n",pos->address, pos->type, pos->size, pos->key, pos->filename);
         }
         else
-            printf("%p, %d, %zu, %d",pos->address, pos->type, pos->size, pos->key);
+            printf("%p, %d, %zu, %d\n",pos->address, pos->type, pos->size, pos->key);
         pos=pos->next;
     }
 }
@@ -1123,7 +1131,7 @@ void allocate(char *arg[]){
                         ErrorSis("Impossible to allocate", NULL);
                     }
                     else if (shmctl(shmid, IPC_STAT, &info)==-1){
-                        ErrorSis("Impossible to get allocated memory information");
+                        ErrorSis("Impossible to get allocated memory information", NULL);
                     }
                     else
                         AddMemList(&list, p, info.shm_segsz, key, SHARED_MEM, -1, NULL);
@@ -1131,43 +1139,53 @@ void allocate(char *arg[]){
             }
         }
         else if (strcmp(arg[0], "-mmap")==0){
-            if (arg[1]!=NULL){
+            if (arg[1]!=NULL && arg[2]!=NULL){
                 struct stat st;
-                int df = open(arg[1], O_RDWR, 0777);
-                if (df==-1){
+                    int perm=O_RDONLY;
+                    for (int i=0; arg[2][i] != '\0'; i++){
+                        if (arg[2][i] == 'w')
+                            perm|=O_RDWR;
+                    }
+                    int prot=0;
+                    for (int i=0; arg[2][i] != '\0'; i++){
+                        if (arg[2][i] == 'r')
+                            prot|=PROT_READ;
+                        if (arg[2][i] == 'w')
+                            prot|=PROT_WRITE;
+                    }
+                int df = open(arg[1], perm);
+                if (df==-1)
                     ErrorSis("Impossible to get descriptor file", NULL);
-                }
                 else{
                     if (fstat(df, &st) == 0){
                         size_t size = st.st_size;
-                        if (arg[2] != NULL){
-                            int prot=0;
-                            if (arg[2][0] == 'r' || arg[2][1] == 'r'){
-                                prot|=PROT_READ;
+                            if (prot==0){
+                                close(df);
+                                ErrorSis("Impossible to get permissions", NULL);
                             }
-                            if (arg[2][0] == 'w' || arg[2][1] == 'w'){
-                                prot|=PROT_WRITE;
-                            }
-                            void *p = mmap(NULL, size, prot, MAP_SHARED, df, 0);
-                            if (p == (void *) -1){
-                                close(df)
-                                ErrorSis("Impossible to allocate", NULL);
-                            }
+                            else{
+                                void *p = mmap(NULL, size, prot, MAP_SHARED, df, 0);
+                                if (p == (void *) -1){
+                                    close(df);
+                                    ErrorSis("Impossible to allocate", NULL);
+                                }
 
-                            else
-                                AddMemList(&list, p, size, -1, MMAP_MEM, df, arg[1]);
+                                else
+                                    AddMemList(&list, p, size, -1, MMAP_MEM, df, arg[1]);
+                            }
                         }
-                        else
-                            ErrorSis("The command requires another argument", NULL);
+                    else{
+                        close(df);
+                        ErrorSis("Impossible to get information from descriptor file", NULL);
                     }
-                    else
-                        ErrorSis("Impossible to get information from descriptor file", NULL)
                 }
             }
         }
     }
-    else
-        MemoryList(&list);
+}
+else
+    MemoryList(&list);
+}
 
 /**************************SHELL**************************/
 
