@@ -9,6 +9,7 @@
 #define _GNU_SOURCE
 #define _FILE_OFFSET_BITS 64
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -24,6 +25,7 @@
 #include <grp.h>
 #include <sys/shm.h>
 #include <sys/ipc.h>
+#include <sys/mman.h>
 
 #define MAXENTRADA 2048
 
@@ -1073,6 +1075,72 @@ void AddMemList(tList *list, void *p, size_t size, key_t key, memType type, int 
         ErrorSis("Impossible to add to memory list", NULL);
 }
 
+void RemoveList(tList *list, node *pos){
+            free(pos->filename);
+            if (pos->prev!=NULL){
+                pos->prev->next=pos->next;
+            }
+            else
+                list->head=pos->next;
+            if (pos->next!=NULL){
+                pos->next->prev=pos->prev;
+            }
+            else
+                list->tail=pos->prev;
+            free(pos);
+}
+
+void DelMemList (tList *list, memType type, size_t size, key_t key, char *filename){
+    if (type==MALLOC_MEM){
+        node *pos=list->tail;
+        while (pos!=NULL && !(pos->size==size && pos->type==type)){
+            pos=pos->prev;
+        }
+        if (pos!=NULL){
+            free(pos->address);
+            RemoveList(list, pos);
+        }
+        else
+            ErrorSis("Block not found", NULL);
+    }
+    else if (type==SHARED_MEM){
+        node *pos=list->tail;
+        while (pos!=NULL && !(pos->key==key && pos->type==type)){
+            pos=pos->prev;
+        }
+        if (pos!=NULL){
+            if (shmdt(pos->address)==-1){
+                ErrorSis("Impossible to detach from memory", NULL);
+            }
+            RemoveList(list, pos);
+        }
+        else
+            ErrorSis("Block not found", NULL);
+    }
+    else if (type==MMAP_MEM){
+        node *pos=list->tail;
+        if (filename!=NULL){
+            while (pos!=NULL && !(pos->type==type && strcmp(pos->filename, filename)==0)){
+                pos=pos->prev;
+            }
+            if (pos!=NULL){
+                if (munmap(pos->address, pos->size)){
+                    ErrorSis("Impossible to unmap file", NULL);
+                }
+                if(close(pos->df)){
+                    ErrorSis("Impossible to close descriptor file", NULL);
+                }
+                RemoveList(list, pos);
+            }
+            else
+                ErrorSis("Block not found", NULL);
+        }
+        else
+            ErrorSis("Invalid filename", NULL);
+    }
+    else
+        ErrorSis("Not a valid memory type", NULL);
+}
 
 void MemoryList(tList *list){
     node *pos=list->head;
@@ -1086,7 +1154,7 @@ void MemoryList(tList *list){
     }
 }
 
-void allocate(char *arg[]){
+void Cmd_allocate(char *arg[]){
     if (arg[0] != NULL){
         if (strcmp(arg[0], "-malloc") == 0){
             if (arg[1] != NULL){
@@ -1180,6 +1248,86 @@ void allocate(char *arg[]){
                     }
                 }
             }
+        }
+    }
+    else
+        MemoryList(&list);
+}
+
+void Cmd_deallocate(char *arg[]){
+    if (arg[0] != NULL){
+        if (strcmp(arg[0], "-malloc") == 0){
+            if (arg[1]!=NULL){
+                size_t size = (size_t)strtoul(arg[1], NULL, 10);
+                if (size==0){
+                    ErrorSis("Impossible to get size", NULL);
+                }
+                else
+                    DelMemList (&list, MALLOC_MEM, size, 0, NULL);
+            }
+            else
+                ErrorSis("Invalid second argument", NULL);
+        }
+        else if (strcmp(arg[0], "-shared") == 0){
+            if (arg[1]!=NULL){
+                key_t key = (key_t) strtoul(arg[1], NULL, 0);
+                DelMemList (&list, SHARED_MEM, 0, key, NULL);
+            }
+            else
+                ErrorSis("Invalid second argument", NULL);
+        }
+        else if (strcmp(arg[0], "-mmap") == 0){
+            if (arg[1]!=NULL)
+                DelMemList (&list, MMAP_MEM, 0, 0, arg[1]);
+            else
+                ErrorSis("Invalid second argument", NULL);
+        }
+        else if (strcmp(arg[0], "-delkey") == 0){
+            if (arg[1]!=NULL){
+                key_t key = (key_t) strtoul(arg[1], NULL, 0);
+                int shmid = shmget(key, 0, 0666);
+                if (shmid==-1)
+                    ErrorSis("Impossible to get shared memory block", NULL);
+                else{
+                    int delk = shmctl(shmid, IPC_RMID, NULL);
+                    if (delk==-1)
+                        ErrorSis("Impossible to delete key", NULL);
+                }
+            }
+            else
+                ErrorSis("Invalid argument", NULL);
+        }
+        else if (arg[0][0]=='-')
+            ErrorSis("Unrecognized command", NULL);
+        else {
+            void *ad = (void *)strtoul(arg[0], NULL, 16);
+            node *pos=list.head;
+            while (pos!=NULL && pos->address!=ad){
+                pos=pos->next;
+            }
+            if (pos!=NULL){
+                if (pos->type==MALLOC_MEM){
+                    free(pos->address);
+                    RemoveList(&list, pos);
+                }
+                else if(pos->type==SHARED_MEM){
+                    if (shmdt(pos->address)==-1){
+                        ErrorSis("Impossible to detach from memory", NULL);
+                    }
+                    RemoveList(&list, pos);
+                }
+                else if(pos->type==MMAP_MEM){
+                    if (munmap(pos->address, pos->size)){
+                        ErrorSis("Impossible to unmap file", NULL);
+                    }
+                    if(close(pos->df)){
+                        ErrorSis("Impossible to close descriptor file", NULL);
+                    }
+                    RemoveList(&list, pos);
+                }
+            }
+            else
+                ErrorSis("Address is not in the memory list", NULL);
         }
     }
     else
