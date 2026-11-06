@@ -26,6 +26,7 @@
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <sys/mman.h>
+#include <sys/wait.h>
 
 #define MAXENTRADA 2048
 
