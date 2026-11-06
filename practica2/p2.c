@@ -1071,6 +1071,7 @@ void AddMemList(tList *list, void *p, size_t size, key_t key, memType type, int 
             list->tail->next=pos;
             list->tail=pos;
         }
+        ListCount+=1;
     }
     else
         ErrorSis("Impossible to add to memory list", NULL);
@@ -1100,9 +1101,11 @@ void DelMemList (tList *list, memType type, size_t size, key_t key, char *filena
         if (pos!=NULL){
             free(pos->address);
             RemoveList(list, pos);
+            ListCount-=1;
         }
         else
             ErrorSis("Block not found", NULL);
+        ListCount-=1;
     }
     else if (type==SHARED_MEM){
         node *pos=list->tail;
@@ -1114,6 +1117,7 @@ void DelMemList (tList *list, memType type, size_t size, key_t key, char *filena
                 ErrorSis("Impossible to detach from memory", NULL);
             }
             RemoveList(list, pos);
+            ListCount-=1;
         }
         else
             ErrorSis("Block not found", NULL);
@@ -1132,6 +1136,7 @@ void DelMemList (tList *list, memType type, size_t size, key_t key, char *filena
                     ErrorSis("Impossible to close descriptor file", NULL);
                 }
                 RemoveList(list, pos);
+                ListCount-=1;
             }
             else
                 ErrorSis("Block not found", NULL);
@@ -1144,15 +1149,7 @@ void DelMemList (tList *list, memType type, size_t size, key_t key, char *filena
 }
 
 void MemoryList(tList *list){
-    node *pos=list->head;
-    while (pos!=NULL){
-        if (pos->filename != NULL){
-            printf("%p, %d, %zu, %d, %s\n",pos->address, pos->type, pos->size, pos->key, pos->filename);
-        }
-        else
-            printf("%p, %d, %zu, %d\n",pos->address, pos->type, pos->size, pos->key);
-        pos=pos->next;
-    }
+    printf("List of blocks assigned for the process is %d", ListCount);
 }
 
 void Cmd_allocate(char *arg[]){
@@ -1310,12 +1307,14 @@ void Cmd_deallocate(char *arg[]){
                 if (pos->type==MALLOC_MEM){
                     free(pos->address);
                     RemoveList(&list, pos);
+                    ListCount-=1;
                 }
                 else if(pos->type==SHARED_MEM){
                     if (shmdt(pos->address)==-1){
                         ErrorSis("Impossible to detach from memory", NULL);
                     }
                     RemoveList(&list, pos);
+                    ListCount-=1;
                 }
                 else if(pos->type==MMAP_MEM){
                     if (munmap(pos->address, pos->size)){
@@ -1325,6 +1324,7 @@ void Cmd_deallocate(char *arg[]){
                         ErrorSis("Impossible to close descriptor file", NULL);
                     }
                     RemoveList(&list, pos);
+                    ListCount-=1;
                 }
             }
             else
@@ -1333,6 +1333,117 @@ void Cmd_deallocate(char *arg[]){
     }
     else
         MemoryList(&list);
+}
+
+void Cmd_io(char *arg[]){
+    if(arg[3] != NULL){
+        if (strcmp(arg[0], "read") == 0){
+            void *ad = (void *)strtoul(arg[2], NULL, 16);
+            size_t cnt = strtoul(arg[3], NULL, 10);
+            int df=open(arg[1], O_RDONLY, 0666);
+            if (df==-1){
+                ErrorSis("Impossible to open file", NULL);
+            }
+            else{
+                int rdio = read(df, ad, cnt);
+                if (rdio==-1)
+                    ErrorSis("Impossible to read file", NULL);
+                close(df);
+            }
+        }
+        else if (strcmp(arg[0], "write") == 0){
+            if (strcmp(arg[1], "-o") == 0){
+                if (arg[4]!=NULL){
+                    void *ad = (void *)strtoul(arg[3], NULL, 16);
+                    size_t cnt = strtoul(arg[4], NULL, 10);
+                    int df=open(arg[2], O_CREAT | O_WRONLY | O_TRUNC, 0666);
+                    if (df==-1){
+                        ErrorSis("Impossible to open file", NULL);
+                    }
+                    else{
+                        int wrio = write(df, ad, cnt);
+                        if (wrio==-1)
+                            ErrorSis("Impossible to overwrite file", NULL);
+                        close(df);
+                    }
+                }
+                else
+                    ErrorSis("This command requires more arguments", NULL);
+
+            }
+            else if (arg[1][0] != '-'){
+                void *ad = (void *)strtoul(arg[2], NULL, 16);
+                size_t cnt = strtoul(arg[3], NULL, 10);
+                int df=open(arg[1], O_CREAT | O_WRONLY | O_EXCL, 0666);
+                if (df==-1){
+                    ErrorSis("Impossible to create file", NULL);
+                }
+                else{
+                    int wrio = write(df, ad, cnt);
+                    if (wrio==-1)
+                        ErrorSis("Impossible to write file", NULL);
+                    close(df);
+                }
+            }
+            else
+                ErrorSis("Invalid option", NULL);
+        }
+        else
+            ErrorSis("Invalid option", NULL);
+    }
+    else
+        ErrorSis("This command requires more arguments", NULL);
+}
+
+void Blocks(){
+    MemoryList(&list);
+}
+
+void Funcs(){
+    printf("Shell functions: %p, %p, %p\n", (void *)MemoryList, (void *)Cmd_deallocate, (void *)Cmd_io);
+    printf("Library functions: %p, %p, %p\n", (void *)malloc, (void *)strcmp, (void *)open);
+}
+
+void Vars(){
+    int a = 1, b = 2, c=3, e1 = 1, e2 = 2, e3 = 3;
+    static int s1 = 1, s2 = 2, s3 = 3;
+    printf("Automatic: %p, %p, %p\n", (void *)&a, (void *)&b, (void *)&c);
+    printf("Static: %p, %p, %p\n", (void *)&s1, (void *)&s2, (void *)&s3);
+    printf("External: %p, %p, %p\n", (void *)&e1, (void *)&e2, (void *)&e3);
+}
+
+void Cmd_memory(char *arg[]){
+    if (arg[0] != NULL){
+        if (strcmp(arg[0], "-blocks") == 0)
+            Blocks();
+        else if (strcmp(arg[0], "-funcs")){
+            Funcs();
+        }
+        else if (strcmp(arg[0], "-vars")){
+            Vars();
+        }
+        else if (strcmp(arg[0], "-all")){
+            Blocks();
+            Funcs();
+            Vars();
+        }
+        else if (strcmp(arg[0], "-pmap")==0){
+            char pidstr[32];
+            snprintf(pidstr, sizeof pidstr, "%d", (int)getpid());
+            pid_t child = fork();
+            if (child==-1)
+                ErrorSis("Impossible to create process", NULL);
+            else if (child==0){
+                execlp("pmap", "pmap", pidstr, NULL);
+                ErrorSis("Impossible to execute pmap", NULL);
+                exit(1);
+            }
+            else
+                waitpid(child, NULL, 0);
+        }
+    }
+    else
+        ErrorSis("This command requires more arguments", NULL);
 }
 
 /**************************SHELL**************************/
