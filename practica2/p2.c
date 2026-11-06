@@ -6,7 +6,7 @@
  *   Román Casas Riveira          login: r.casas@udc.es
  */
 
-#define _GNU_SOURCE
+#define _XOPEN_SOURCE 700
 #define _FILE_OFFSET_BITS 64
 #include <stdio.h>
 #include <stdbool.h>
@@ -27,6 +27,7 @@
 #include <sys/ipc.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
+#include <ctype.h>
 
 #define MAXENTRADA 2048
 
@@ -41,6 +42,7 @@ typedef struct node{
     memType type;
     char *filename;
     int df;
+    time_t time;
     struct node *prev;
     struct node *next;
 } node;
@@ -381,12 +383,15 @@ void Cmd_open(char *arg[])
 
 void Cmd_close(char *arg[])
 {
-    int i, df;
+    int i, df, forzar = 0;
     char *num = NULL;
+    node *m;
 
     for (i = 0; arg[i] != NULL; i++) {
-        if (!strcmp(arg[i], "-f"))
+        if (!strcmp(arg[i], "-f")) {
+            forzar = 1;
             continue;
+        }
         if (num != NULL || LeerDf(arg[i], &df) == -1) {
             printf("Usage: close df [-f]\n");
             return;
@@ -398,12 +403,24 @@ void Cmd_close(char *arg[])
         return;
     }
 
+    // a mapped file keeps its descriptor, it is only closed with -f
+    for (m = list.head; m != NULL; m = m->next)
+        if (m->type == MMAP_MEM && m->df == df)
+            break;
+    if (m != NULL && !forzar) {
+        printf("Descriptor %d is used by the mapping of %s, use -f to close it anyway\n",
+               df, m->filename);
+        return;
+    }
+
     fflush(stdout);   // in case we close the standard output
     if (close(df) == -1) {
         ErrorSis("close descriptor", num);
         return;
     }
     EliminarFichero(df);
+    if (m != NULL)
+        m->df = -1;   // so deallocate does not close it again
 }
 
 void Cmd_dup(char *arg[])
@@ -649,6 +666,42 @@ static const Ayuda AYUDAS[] = {
      "\t-reca: recursive; the recursion is done AFTER listing the directory\n"
      "\t-recb: recursive; the recursion is done BEFORE listing the directory\n"
      "\t-long, -link, -acc: as in listfile"},
+    {"read", "read df addr cont",
+     "transfers cont bytes from the open file df to the address addr (in hex)"},
+    {"write", "write df addr cont",
+     "transfers cont bytes from the address addr (in hex) to the open file df"},
+    {"recurse", "recurse n",
+     "executes the recursive function n times, showing the addresses of its\n"
+     "automatic array, its static array and its parameter"},
+    {"memfill", "memfill addr cont hcode",
+     "fills cont bytes starting at address addr with the hex value hcode"},
+    {"memdump", "memdump addr cont",
+     "dumps onto screen cont bytes starting at address addr (characters and hex codes)"},
+    {"allocate", "allocate [-malloc|-shared|-createshared|-mmap] ...",
+     "allocates a block of memory. Without parameters shows the list of allocated blocks\n"
+     "\t-malloc siz: allocates a block of size siz with malloc\n"
+     "\t-createshared cl siz: creates a block of shared memory with key cl and size siz\n"
+     "\t-shared cl: attaches the existing block of shared memory with key cl\n"
+     "\t-mmap fil perm: maps the file fil in memory with permissions perm (r, w, x)"},
+    {"deallocate", "deallocate [-malloc|-shared|-delkey|-mmap|addr] ...",
+     "deallocates a block of memory. Without parameters shows the list of allocated blocks\n"
+     "\t-malloc siz: frees a malloc block of size siz\n"
+     "\t-shared cl: detaches the block of shared memory with key cl\n"
+     "\t-mmap fil: unmaps the file fil\n"
+     "\t-delkey cl: removes the key cl from the system (does not detach anything)\n"
+     "\taddr: deallocates the block at address addr"},
+    {"i-o", "i-o [read|write] [-o] f addr cnt",
+     "direct input output from memory to files\n"
+     "\tread f addr cnt: reads cnt bytes from file f into address addr (in hex)\n"
+     "\twrite [-o] f addr cnt: writes cnt bytes from address addr into file f\n"
+     "\t-o: the file can be overwritten"},
+    {"memory", "memory [-blocks|-funcs|-vars|-all|-pmap]",
+     "shows information on the shell's memory\n"
+     "\t-blocks: the list of allocated blocks\n"
+     "\t-funcs: addresses of three shell functions and three library functions\n"
+     "\t-vars: addresses of automatic, static and external variables\n"
+     "\t-all: -blocks, -funcs and -vars\n"
+     "\t-pmap: shows the shell's address space with pmap"},
 };
 
 #define NUM_AYUDAS ((int)(sizeof(AYUDAS) / sizeof(AYUDAS[0])))
@@ -1039,411 +1092,766 @@ void Cmd_list(char *arg[])
     }
 }
 
-bool isEmptyList(tList *list){
-    if (list->head==NULL){
-        return true;
+// the address comes in hex (with or without 0x); it is not checked to be valid
+int LeerDireccion(char *s, void **p)
+{
+    char *fin;
+    unsigned long v;
+
+    errno = 0;
+    v = strtoul(s, &fin, 16);
+    if (errno != 0 || *s == '\0' || *fin != '\0' || s[0] == '-')
+        return -1;
+    *p = (void *) v;
+    return 0;
+}
+
+// number of bytes in decimal, returns -1 if it is not valid
+int LeerCantidad(char *s, size_t *cont)
+{
+    char *fin;
+    unsigned long v;
+
+    errno = 0;
+    v = strtoul(s, &fin, 10);
+    if (errno != 0 || *s == '\0' || *fin != '\0' || s[0] == '-' || v > SSIZE_MAX)
+        return -1;
+    *cont = v;
+    return 0;
+}
+
+void Cmd_read(char *arg[])
+{
+    int df;
+    void *p;
+    size_t cont;
+    ssize_t leidos;
+
+    if (NumArgs(arg) != 3) {
+        printf("Usage: read df addr cont\n");
+        return;
     }
+    if (LeerDf(arg[0], &df) == -1) {
+        printf("Invalid descriptor: %s\n", arg[0]);
+        return;
+    }
+    if (LeerDireccion(arg[1], &p) == -1) {
+        printf("Invalid address: %s\n", arg[1]);
+        return;
+    }
+    if (LeerCantidad(arg[2], &cont) == -1) {
+        printf("Invalid number of bytes: %s\n", arg[2]);
+        return;
+    }
+
+    // with a bad address read fails with EFAULT, it does not crash the shell
+    leidos = read(df, p, cont);
+    if (leidos == -1)
+        ErrorSis("read from descriptor", arg[0]);
     else
-        return false;
+        printf("Read %ld bytes from descriptor %d into %p\n", (long) leidos, df, p);
 }
 
-void AddMemList(tList *list, void *p, size_t size, key_t key, memType type, int df, char *filename){
-    node *pos= malloc(sizeof(node));
-    if (pos != NULL){
-        pos->address=p;
-        pos->type=type;
-        pos->size=size;
-        pos->key=key;
-        pos->df=df;
-        if (filename != NULL)
-            pos->filename=strdup(filename);
-        else
-            pos->filename=NULL;
+void Cmd_write(char *arg[])
+{
+    int df;
+    void *p;
+    size_t cont;
+    ssize_t escritos;
 
-        pos->next=NULL;
-        if (isEmptyList(list)){
-            pos->prev=NULL;
-            list->head=pos;
-            list->tail=pos;
-        }
-        else{
-            pos->prev=list->tail;
-            list->tail->next=pos;
-            list->tail=pos;
-        }
-        ListCount+=1;
+    if (NumArgs(arg) != 3) {
+        printf("Usage: write df addr cont\n");
+        return;
     }
+    if (LeerDf(arg[0], &df) == -1) {
+        printf("Invalid descriptor: %s\n", arg[0]);
+        return;
+    }
+    if (LeerDireccion(arg[1], &p) == -1) {
+        printf("Invalid address: %s\n", arg[1]);
+        return;
+    }
+    if (LeerCantidad(arg[2], &cont) == -1) {
+        printf("Invalid number of bytes: %s\n", arg[2]);
+        return;
+    }
+
+    fflush(stdout);   // in case df is the standard output
+    escritos = write(df, p, cont);
+    if (escritos == -1)
+        ErrorSis("write to descriptor", arg[0]);
     else
-        ErrorSis("Impossible to add to memory list", NULL);
+        printf("Wrote %ld bytes from %p to descriptor %d\n", (long) escritos, p, df);
 }
 
-void RemoveList(tList *list, node *pos){
-            free(pos->filename);
-            if (pos->prev!=NULL){
-                pos->prev->next=pos->next;
-            }
-            else
-                list->head=pos->next;
-            if (pos->next!=NULL){
-                pos->next->prev=pos->prev;
-            }
-            else
-                list->tail=pos->prev;
-            free(pos);
+#define TAMANO 2048
+
+void Recursiva(int n)
+{
+    char automatico[TAMANO];
+    static char estatico[TAMANO];
+
+    printf("parameter:%3d(%p) array %p, static array %p\n",
+           n, (void *) &n, (void *) automatico, (void *) estatico);
+    if (n > 0)
+        Recursiva(n - 1);
 }
 
-void DelMemList (tList *list, memType type, size_t size, key_t key, char *filename){
-    if (type==MALLOC_MEM){
-        node *pos=list->tail;
-        while (pos!=NULL && !(pos->size==size && pos->type==type)){
-            pos=pos->prev;
-        }
-        if (pos!=NULL){
-            free(pos->address);
-            RemoveList(list, pos);
-            ListCount-=1;
-        }
-        else
-            ErrorSis("Block not found", NULL);
-        ListCount-=1;
+void Cmd_recurse(char *arg[])
+{
+    long n;
+    char *fin;
+
+    if (arg[0] == NULL) {
+        printf("Usage: recurse n\n");
+        return;
     }
-    else if (type==SHARED_MEM){
-        node *pos=list->tail;
-        while (pos!=NULL && !(pos->key==key && pos->type==type)){
-            pos=pos->prev;
-        }
-        if (pos!=NULL){
-            if (shmdt(pos->address)==-1){
-                ErrorSis("Impossible to detach from memory", NULL);
-            }
-            RemoveList(list, pos);
-            ListCount-=1;
-        }
-        else
-            ErrorSis("Block not found", NULL);
+
+    errno = 0;
+    n = strtol(arg[0], &fin, 10);
+    if (errno != 0 || *fin != '\0' || n < 0 || n > INT_MAX) {
+        printf("Invalid number: %s\n", arg[0]);
+        return;
     }
-    else if (type==MMAP_MEM){
-        node *pos=list->tail;
-        if (filename!=NULL){
-            while (pos!=NULL && !(pos->type==type && strcmp(pos->filename, filename)==0)){
-                pos=pos->prev;
-            }
-            if (pos!=NULL){
-                if (munmap(pos->address, pos->size)){
-                    ErrorSis("Impossible to unmap file", NULL);
-                }
-                if(close(pos->df)){
-                    ErrorSis("Impossible to close descriptor file", NULL);
-                }
-                RemoveList(list, pos);
-                ListCount-=1;
-            }
-            else
-                ErrorSis("Block not found", NULL);
-        }
-        else
-            ErrorSis("Invalid filename", NULL);
+    Recursiva((int) n);
+}
+
+void LlenarMemoria(void *p, size_t cont, unsigned char byte)
+{
+    unsigned char *arr = p;
+    size_t i;
+
+    for (i = 0; i < cont; i++)
+        arr[i] = byte;
+}
+
+void Cmd_memfill(char *arg[])
+{
+    void *p;
+    size_t cont;
+    unsigned long byte;
+    char *fin;
+
+    if (NumArgs(arg) != 3) {
+        printf("Usage: memfill addr cont hcode\n");
+        return;
     }
+    if (LeerDireccion(arg[0], &p) == -1) {
+        printf("Invalid address: %s\n", arg[0]);
+        return;
+    }
+    if (LeerCantidad(arg[1], &cont) == -1) {
+        printf("Invalid number of bytes: %s\n", arg[1]);
+        return;
+    }
+
+    errno = 0;
+    byte = strtoul(arg[2], &fin, 16);
+    if (errno != 0 || *fin != '\0' || arg[2][0] == '-' || byte > 0xFF) {
+        printf("Invalid byte: %s\n", arg[2]);
+        return;
+    }
+
+    printf("Filling %lu bytes of memory with byte %c(%02lx) from address %p\n",
+           (unsigned long) cont, isprint(byte) ? (int) byte : ' ', byte, p);
+    fflush(stdout);   // so the message is shown even if the address is bad and it crashes
+    LlenarMemoria(p, cont, (unsigned char) byte);
+}
+
+#define BYTES_LINEA 25
+
+// each line shows the characters and below them their hex codes
+void VolcarMemoria(void *p, size_t cont)
+{
+    unsigned char *arr = p;
+    size_t i, j, lim;
+
+    for (i = 0; i < cont; i += BYTES_LINEA) {
+        lim = (i + BYTES_LINEA < cont) ? i + BYTES_LINEA : cont;
+        for (j = i; j < lim; j++)
+            printf("%2c ", isprint(arr[j]) ? arr[j] : ' ');
+        printf("\n");
+        for (j = i; j < lim; j++)
+            printf("%02x ", arr[j]);
+        printf("\n");
+    }
+}
+
+void Cmd_memdump(char *arg[])
+{
+    void *p;
+    size_t cont;
+
+    if (NumArgs(arg) != 2) {
+        printf("Usage: memdump addr cont\n");
+        return;
+    }
+    if (LeerDireccion(arg[0], &p) == -1) {
+        printf("Invalid address: %s\n", arg[0]);
+        return;
+    }
+    if (LeerCantidad(arg[1], &cont) == -1) {
+        printf("Invalid number of bytes: %s\n", arg[1]);
+        return;
+    }
+
+    printf("Dumping %lu bytes from address %p\n", (unsigned long) cont, p);
+    fflush(stdout);
+    VolcarMemoria(p, cont);
+}
+
+/*************MEMORY (P2)************************/
+
+bool isEmptyList(tList *list)
+{
+    return list->head == NULL;
+}
+
+// returns -1 if there is no memory for the node; the block itself is not freed here
+int AddMemList(tList *list, void *p, size_t size, key_t key, memType type, int df, char *filename)
+{
+    node *pos = malloc(sizeof(node));
+
+    if (pos == NULL)
+        return -1;
+    pos->filename = NULL;
+    if (filename != NULL && (pos->filename = strdup(filename)) == NULL) {
+        free(pos);
+        return -1;
+    }
+    pos->address = p;
+    pos->size = size;
+    pos->key = key;
+    pos->type = type;
+    pos->df = df;
+    pos->time = time(NULL);
+
+    pos->next = NULL;
+    pos->prev = list->tail;
+    if (isEmptyList(list))
+        list->head = pos;
     else
-        ErrorSis("Not a valid memory type", NULL);
+        list->tail->next = pos;
+    list->tail = pos;
+    return 0;
 }
 
-void MemoryList(tList *list){
-    printf("List of blocks assigned for the process is %d", ListCount);
+void RemoveList(tList *list, node *pos)
+{
+    if (pos->prev != NULL)
+        pos->prev->next = pos->next;
+    else
+        list->head = pos->next;
+    if (pos->next != NULL)
+        pos->next->prev = pos->prev;
+    else
+        list->tail = pos->prev;
+    free(pos->filename);
+    free(pos);
 }
 
-void Cmd_allocate(char *arg[]){
-    if (arg[0] != NULL){
-        if (strcmp(arg[0], "-malloc") == 0){
-            if (arg[1] != NULL){
-                size_t size = (size_t) strtoul(arg[1], NULL, 10);
-                void *p = malloc(size);
-                if (p==NULL){
-                    ErrorSis("Impossible to allocate", NULL);
-                }
-                else
-                    AddMemList(&list, p, size, 0, MALLOC_MEM, -1, NULL);
-            }
-        }
-        else if (strcmp(arg[0], "-createshared") == 0){
-            if (arg[1] != NULL && arg[2] != NULL){
-                key_t key = (key_t) strtoul(arg[1], NULL, 0);
-                size_t size = (size_t) strtoul(arg[2], NULL, 10);
-                int shmid = shmget(key, size, IPC_CREAT | IPC_EXCL | 0666);
-                if (shmid==-1){
-                    ErrorSis("Impossible to allocate", NULL);
-                }
-                else{
-                    void *p = shmat(shmid, NULL, 0);
-                    if (p == (void *)-1){
-                        ErrorSis("Impossible to allocate", NULL);
-                    }
-                    else
-                        AddMemList(&list, p, size, key, SHARED_MEM, -1, NULL);
-                }
-            }
-        }
-        else if (strcmp(arg[0], "-shared")==0){
-            if (arg[1] != NULL){
-                key_t key = (key_t) strtoul(arg[1], NULL, 0);
-                int shmid = shmget(key, 0, 0666);
-                if (shmid==-1){
-                ErrorSis("Impossible to allocate", NULL);
-                }
-                else{
-                    void *p = shmat(shmid, NULL, 0);
-                    struct shmid_ds info;
-                    if (p == (void *)-1){
-                        ErrorSis("Impossible to allocate", NULL);
-                    }
-                    else if (shmctl(shmid, IPC_STAT, &info)==-1){
-                        ErrorSis("Impossible to get allocated memory information", NULL);
-                    }
-                    else
-                        AddMemList(&list, p, info.shm_segsz, key, SHARED_MEM, -1, NULL);
-                }
-            }
-        }
-        else if (strcmp(arg[0], "-mmap")==0){
-            if (arg[1]!=NULL && arg[2]!=NULL){
-                struct stat st;
-                    int perm=O_RDONLY;
-                    for (int i=0; arg[2][i] != '\0'; i++){
-                        if (arg[2][i] == 'w')
-                            perm|=O_RDWR;
-                    }
-                    int prot=0;
-                    for (int i=0; arg[2][i] != '\0'; i++){
-                        if (arg[2][i] == 'r')
-                            prot|=PROT_READ;
-                        if (arg[2][i] == 'w')
-                            prot|=PROT_WRITE;
-                    }
-                int df = open(arg[1], perm);
-                if (df==-1)
-                    ErrorSis("Impossible to get descriptor file", NULL);
-                else{
-                    if (fstat(df, &st) == 0){
-                        size_t size = st.st_size;
-                            if (prot==0){
-                                close(df);
-                                ErrorSis("Impossible to get permissions", NULL);
-                            }
-                            else{
-                                void *p = mmap(NULL, size, prot, MAP_SHARED, df, 0);
-                                if (p == (void *) -1){
-                                    close(df);
-                                    ErrorSis("Impossible to allocate", NULL);
-                                }
+// searches from the end, so if there are several matches the last one allocated is found
+node *BuscarBloque(tList *list, memType type, size_t size, key_t key, char *filename)
+{
+    node *pos;
 
-                                else
-                                    AddMemList(&list, p, size, -1, MMAP_MEM, df, arg[1]);
-                            }
-                        }
-                    else{
-                        close(df);
-                        ErrorSis("Impossible to get information from descriptor file", NULL);
-                    }
-                }
-            }
+    for (pos = list->tail; pos != NULL; pos = pos->prev) {
+        if (pos->type != type)
+            continue;
+        if (type == MALLOC_MEM && pos->size == size)
+            return pos;
+        if (type == SHARED_MEM && pos->key == key)
+            return pos;
+        if (type == MMAP_MEM && !strcmp(pos->filename, filename))
+            return pos;
+    }
+    return NULL;
+}
+
+// frees the block (free, shmdt or munmap) and removes it from the list
+void LiberarBloque(tList *list, node *pos)
+{
+    if (pos->type == MALLOC_MEM) {
+        free(pos->address);
+    }
+    else if (pos->type == SHARED_MEM) {
+        if (shmdt(pos->address) == -1) {
+            printf("Cannot detach %p: %s\n", pos->address, strerror(errno));
+            return;
         }
     }
-    else
-        MemoryList(&list);
+    else {
+        if (munmap(pos->address, pos->size) == -1) {
+            ErrorSis("unmap", pos->filename);
+            return;
+        }
+        // df is -1 if it was already closed with close -f
+        if (pos->df != -1) {
+            if (close(pos->df) == -1)
+                ErrorSis("close the descriptor of", pos->filename);
+            else
+                EliminarFichero(pos->df);
+        }
+    }
+    printf("Deallocated block at %p\n", pos->address);
+    RemoveList(list, pos);
 }
 
-void Cmd_deallocate(char *arg[]){
-    if (arg[0] != NULL){
-        if (strcmp(arg[0], "-malloc") == 0){
-            if (arg[1]!=NULL){
-                size_t size = (size_t)strtoul(arg[1], NULL, 10);
-                if (size==0){
-                    ErrorSis("Impossible to get size", NULL);
-                }
-                else
-                    DelMemList (&list, MALLOC_MEM, size, 0, NULL);
-            }
-            else
-                ErrorSis("Invalid second argument", NULL);
+// tipo -1 shows all the blocks, otherwise only the ones of that type
+void MemoryList(tList *list, int tipo)
+{
+    node *pos;
+    char fecha[32];
+
+    printf("******List of blocks allocated for process %d\n", (int) getpid());
+    for (pos = list->head; pos != NULL; pos = pos->next) {
+        if (tipo != -1 && (int) pos->type != tipo)
+            continue;
+        strftime(fecha, sizeof(fecha), "%b %d %H:%M", localtime(&pos->time));
+        printf("%20p %12lu %s ", pos->address, (unsigned long) pos->size, fecha);
+        if (pos->type == MALLOC_MEM)
+            printf("malloc\n");
+        else if (pos->type == SHARED_MEM)
+            printf("shared (key %d)\n", (int) pos->key);
+        else
+            printf("%s (descriptor %d)\n", pos->filename, pos->df);
+    }
+}
+
+// shared memory key in decimal, 0 (IPC_PRIVATE) is not allowed
+int LeerClave(char *s, key_t *clave)
+{
+    char *fin;
+    long v;
+
+    errno = 0;
+    v = strtol(s, &fin, 10);
+    if (errno != 0 || *s == '\0' || *fin != '\0' || v <= 0 || v > INT_MAX)
+        return -1;
+    *clave = (key_t) v;
+    return 0;
+}
+
+void AsignarMalloc(char *arg[])
+{
+    size_t tam;
+    void *p;
+
+    if (arg[0] == NULL) {
+        MemoryList(&list, MALLOC_MEM);
+        return;
+    }
+    if (LeerCantidad(arg[0], &tam) == -1 || tam == 0) {
+        printf("Invalid size: %s\n", arg[0]);
+        return;
+    }
+    if ((p = malloc(tam)) == NULL) {
+        ErrorSis("allocate memory", NULL);
+        return;
+    }
+    if (AddMemList(&list, p, tam, 0, MALLOC_MEM, -1, NULL) == -1) {
+        printf("Cannot add the block to the list: not enough memory\n");
+        free(p);
+        return;
+    }
+    printf("Allocated %lu bytes at %p\n", (unsigned long) tam, p);
+}
+
+void AsignarCreateShared(char *arg[])
+{
+    key_t clave;
+    size_t tam;
+    int id;
+    void *p;
+
+    if (arg[0] == NULL) {
+        MemoryList(&list, SHARED_MEM);
+        return;
+    }
+    if (arg[1] == NULL) {
+        printf("Usage: allocate -createshared cl siz\n");
+        return;
+    }
+    if (LeerClave(arg[0], &clave) == -1) {
+        printf("Invalid key: %s\n", arg[0]);
+        return;
+    }
+    if (LeerCantidad(arg[1], &tam) == -1 || tam == 0) {
+        printf("Invalid size: %s\n", arg[1]);
+        return;
+    }
+
+    // IPC_EXCL makes it fail if the key is already in use
+    if ((id = shmget(clave, tam, IPC_CREAT | IPC_EXCL | 0666)) == -1) {
+        ErrorSis("create shared memory with key", arg[0]);
+        return;
+    }
+    if ((p = shmat(id, NULL, 0)) == (void *) -1) {
+        ErrorSis("attach shared memory with key", arg[0]);
+        shmctl(id, IPC_RMID, NULL);   // we just created it, so we remove it
+        return;
+    }
+    if (AddMemList(&list, p, tam, clave, SHARED_MEM, -1, NULL) == -1) {
+        printf("Cannot add the block to the list: not enough memory\n");
+        shmdt(p);
+        return;
+    }
+    printf("Allocated shared memory (key %d) at %p\n", (int) clave, p);
+}
+
+void AsignarShared(char *arg[])
+{
+    key_t clave;
+    int id;
+    void *p;
+    struct shmid_ds info;
+
+    if (arg[0] == NULL) {
+        MemoryList(&list, SHARED_MEM);
+        return;
+    }
+    if (LeerClave(arg[0], &clave) == -1) {
+        printf("Invalid key: %s\n", arg[0]);
+        return;
+    }
+
+    if ((id = shmget(clave, 0, 0666)) == -1) {
+        ErrorSis("get shared memory with key", arg[0]);
+        return;
+    }
+    if (shmctl(id, IPC_STAT, &info) == -1) {
+        ErrorSis("get information of shared memory with key", arg[0]);
+        return;
+    }
+    if ((p = shmat(id, NULL, 0)) == (void *) -1) {
+        ErrorSis("attach shared memory with key", arg[0]);
+        return;
+    }
+    if (AddMemList(&list, p, info.shm_segsz, clave, SHARED_MEM, -1, NULL) == -1) {
+        printf("Cannot add the block to the list: not enough memory\n");
+        shmdt(p);
+        return;
+    }
+    printf("Attached shared memory (key %d) at %p\n", (int) clave, p);
+}
+
+void AsignarMmap(char *arg[])
+{
+    int i, df, modo = O_RDONLY, prot = 0;
+    struct stat st;
+    void *p;
+
+    if (arg[0] == NULL) {
+        MemoryList(&list, MMAP_MEM);
+        return;
+    }
+    if (arg[1] == NULL) {
+        printf("Usage: allocate -mmap fil perm\n");
+        return;
+    }
+
+    for (i = 0; arg[1][i] != '\0'; i++) {
+        if (arg[1][i] == 'r')
+            prot |= PROT_READ;
+        else if (arg[1][i] == 'w') {
+            prot |= PROT_WRITE;
+            modo = O_RDWR;   // MAP_SHARED with write needs the file open for writing
         }
-        else if (strcmp(arg[0], "-shared") == 0){
-            if (arg[1]!=NULL){
-                key_t key = (key_t) strtoul(arg[1], NULL, 0);
-                DelMemList (&list, SHARED_MEM, 0, key, NULL);
-            }
-            else
-                ErrorSis("Invalid second argument", NULL);
-        }
-        else if (strcmp(arg[0], "-mmap") == 0){
-            if (arg[1]!=NULL)
-                DelMemList (&list, MMAP_MEM, 0, 0, arg[1]);
-            else
-                ErrorSis("Invalid second argument", NULL);
-        }
-        else if (strcmp(arg[0], "-delkey") == 0){
-            if (arg[1]!=NULL){
-                key_t key = (key_t) strtoul(arg[1], NULL, 0);
-                int shmid = shmget(key, 0, 0666);
-                if (shmid==-1)
-                    ErrorSis("Impossible to get shared memory block", NULL);
-                else{
-                    int delk = shmctl(shmid, IPC_RMID, NULL);
-                    if (delk==-1)
-                        ErrorSis("Impossible to delete key", NULL);
-                }
-            }
-            else
-                ErrorSis("Invalid argument", NULL);
-        }
-        else if (arg[0][0]=='-')
-            ErrorSis("Unrecognized command", NULL);
+        else if (arg[1][i] == 'x')
+            prot |= PROT_EXEC;
         else {
-            void *ad = (void *)strtoul(arg[0], NULL, 16);
-            node *pos=list.head;
-            while (pos!=NULL && pos->address!=ad){
-                pos=pos->next;
-            }
-            if (pos!=NULL){
-                if (pos->type==MALLOC_MEM){
-                    free(pos->address);
-                    RemoveList(&list, pos);
-                    ListCount-=1;
-                }
-                else if(pos->type==SHARED_MEM){
-                    if (shmdt(pos->address)==-1){
-                        ErrorSis("Impossible to detach from memory", NULL);
-                    }
-                    RemoveList(&list, pos);
-                    ListCount-=1;
-                }
-                else if(pos->type==MMAP_MEM){
-                    if (munmap(pos->address, pos->size)){
-                        ErrorSis("Impossible to unmap file", NULL);
-                    }
-                    if(close(pos->df)){
-                        ErrorSis("Impossible to close descriptor file", NULL);
-                    }
-                    RemoveList(&list, pos);
-                    ListCount-=1;
-                }
-            }
-            else
-                ErrorSis("Address is not in the memory list", NULL);
+            printf("Invalid permissions: %s (use r, w and x)\n", arg[1]);
+            return;
         }
     }
-    else
-        MemoryList(&list);
+
+    if ((df = open(arg[0], modo)) == -1) {
+        ErrorSis("open", arg[0]);
+        return;
+    }
+    if (fstat(df, &st) == -1) {
+        ErrorSis("access", arg[0]);
+        close(df);
+        return;
+    }
+    if (st.st_size == 0) {
+        printf("Cannot map %s: the file is empty\n", arg[0]);
+        close(df);
+        return;
+    }
+    if ((p = mmap(NULL, st.st_size, prot, MAP_SHARED, df, 0)) == MAP_FAILED) {
+        ErrorSis("map", arg[0]);
+        close(df);
+        return;
+    }
+    if (AddMemList(&list, p, st.st_size, -1, MMAP_MEM, df, arg[0]) == -1) {
+        printf("Cannot add the block to the list: not enough memory\n");
+        munmap(p, st.st_size);
+        close(df);
+        return;
+    }
+    // the descriptor stays open, so it also goes to the open files list
+    if (AnadirFichero(df, modo, arg[0]) == -1)
+        printf("Cannot add %s to the open files list: not enough memory\n", arg[0]);
+    printf("File %s mapped at %p\n", arg[0], p);
 }
 
-void Cmd_io(char *arg[]){
-    if(arg[3] != NULL){
-        if (strcmp(arg[0], "read") == 0){
-            void *ad = (void *)strtoul(arg[2], NULL, 16);
-            size_t cnt = strtoul(arg[3], NULL, 10);
-            int df=open(arg[1], O_RDONLY, 0666);
-            if (df==-1){
-                ErrorSis("Impossible to open file", NULL);
-            }
-            else{
-                int rdio = read(df, ad, cnt);
-                if (rdio==-1)
-                    ErrorSis("Impossible to read file", NULL);
-                close(df);
-            }
-        }
-        else if (strcmp(arg[0], "write") == 0){
-            if (strcmp(arg[1], "-o") == 0){
-                if (arg[4]!=NULL){
-                    void *ad = (void *)strtoul(arg[3], NULL, 16);
-                    size_t cnt = strtoul(arg[4], NULL, 10);
-                    int df=open(arg[2], O_CREAT | O_WRONLY | O_TRUNC, 0666);
-                    if (df==-1){
-                        ErrorSis("Impossible to open file", NULL);
-                    }
-                    else{
-                        int wrio = write(df, ad, cnt);
-                        if (wrio==-1)
-                            ErrorSis("Impossible to overwrite file", NULL);
-                        close(df);
-                    }
-                }
-                else
-                    ErrorSis("This command requires more arguments", NULL);
+void Cmd_allocate(char *arg[])
+{
+    if (arg[0] == NULL)
+        MemoryList(&list, -1);
+    else if (!strcmp(arg[0], "-malloc"))
+        AsignarMalloc(arg + 1);
+    else if (!strcmp(arg[0], "-createshared"))
+        AsignarCreateShared(arg + 1);
+    else if (!strcmp(arg[0], "-shared"))
+        AsignarShared(arg + 1);
+    else if (!strcmp(arg[0], "-mmap"))
+        AsignarMmap(arg + 1);
+    else
+        printf("Usage: allocate [-malloc|-shared|-createshared|-mmap] ...\n");
+}
 
-            }
-            else if (arg[1][0] != '-'){
-                void *ad = (void *)strtoul(arg[2], NULL, 16);
-                size_t cnt = strtoul(arg[3], NULL, 10);
-                int df=open(arg[1], O_CREAT | O_WRONLY | O_EXCL, 0666);
-                if (df==-1){
-                    ErrorSis("Impossible to create file", NULL);
-                }
-                else{
-                    int wrio = write(df, ad, cnt);
-                    if (wrio==-1)
-                        ErrorSis("Impossible to write file", NULL);
-                    close(df);
-                }
-            }
-            else
-                ErrorSis("Invalid option", NULL);
+void BorrarClave(char *s)
+{
+    key_t clave;
+    int id;
+
+    if (s == NULL) {
+        printf("Usage: deallocate -delkey cl\n");
+        return;
+    }
+    if (LeerClave(s, &clave) == -1) {
+        printf("Invalid key: %s\n", s);
+        return;
+    }
+    if ((id = shmget(clave, 0, 0666)) == -1) {
+        ErrorSis("get shared memory with key", s);
+        return;
+    }
+    if (shmctl(id, IPC_RMID, NULL) == -1) {
+        ErrorSis("remove key", s);
+        return;
+    }
+    printf("Key %s removed from the system\n", s);
+}
+
+void Cmd_deallocate(char *arg[])
+{
+    node *pos;
+    size_t tam;
+    key_t clave;
+    void *p;
+
+    if (arg[0] == NULL) {
+        MemoryList(&list, -1);
+        return;
+    }
+
+    if (!strcmp(arg[0], "-malloc")) {
+        if (arg[1] == NULL) {
+            MemoryList(&list, MALLOC_MEM);
+            return;
         }
+        if (LeerCantidad(arg[1], &tam) == -1 || tam == 0) {
+            printf("Invalid size: %s\n", arg[1]);
+            return;
+        }
+        if ((pos = BuscarBloque(&list, MALLOC_MEM, tam, 0, NULL)) == NULL) {
+            printf("There is no malloc block of size %lu\n", (unsigned long) tam);
+            return;
+        }
+    }
+    else if (!strcmp(arg[0], "-shared")) {
+        if (arg[1] == NULL) {
+            MemoryList(&list, SHARED_MEM);
+            return;
+        }
+        if (LeerClave(arg[1], &clave) == -1) {
+            printf("Invalid key: %s\n", arg[1]);
+            return;
+        }
+        if ((pos = BuscarBloque(&list, SHARED_MEM, 0, clave, NULL)) == NULL) {
+            printf("There is no shared block with key %d\n", (int) clave);
+            return;
+        }
+    }
+    else if (!strcmp(arg[0], "-mmap")) {
+        if (arg[1] == NULL) {
+            MemoryList(&list, MMAP_MEM);
+            return;
+        }
+        if ((pos = BuscarBloque(&list, MMAP_MEM, 0, 0, arg[1])) == NULL) {
+            printf("File %s is not mapped\n", arg[1]);
+            return;
+        }
+    }
+    else if (!strcmp(arg[0], "-delkey")) {
+        BorrarClave(arg[1]);
+        return;
+    }
+    else if (arg[0][0] == '-') {
+        printf("Usage: deallocate [-malloc|-shared|-delkey|-mmap|addr] ...\n");
+        return;
+    }
+    else {
+        if (LeerDireccion(arg[0], &p) == -1) {
+            printf("Invalid address: %s\n", arg[0]);
+            return;
+        }
+        for (pos = list.head; pos != NULL && pos->address != p; pos = pos->next)
+            ;
+        if (pos == NULL) {
+            printf("Address %p was not allocated with allocate\n", p);
+            return;
+        }
+    }
+
+    LiberarBloque(&list, pos);
+}
+
+void Cmd_io(char *arg[])
+{
+    int n = NumArgs(arg), i = 1, df, flags;
+    void *p;
+    size_t cont;
+    ssize_t res;
+
+    if (n == 4 && !strcmp(arg[0], "read")) {
+        if (LeerDireccion(arg[2], &p) == -1) {
+            printf("Invalid address: %s\n", arg[2]);
+            return;
+        }
+        if (LeerCantidad(arg[3], &cont) == -1) {
+            printf("Invalid number of bytes: %s\n", arg[3]);
+            return;
+        }
+        if ((df = open(arg[1], O_RDONLY)) == -1) {
+            ErrorSis("open", arg[1]);
+            return;
+        }
+        res = read(df, p, cont);
+        if (res == -1)
+            ErrorSis("read", arg[1]);
         else
-            ErrorSis("Invalid option", NULL);
+            printf("Read %ld bytes from %s into %p\n", (long) res, arg[1], p);
+        close(df);
+        return;
     }
-    else
-        ErrorSis("This command requires more arguments", NULL);
+
+    if (n >= 1 && !strcmp(arg[0], "write")) {
+        // without -o the file must not exist (O_EXCL), with -o it is overwritten
+        flags = O_WRONLY | O_CREAT | O_EXCL;
+        if (n == 5 && !strcmp(arg[1], "-o")) {
+            flags = O_WRONLY | O_CREAT | O_TRUNC;
+            i = 2;
+        }
+        if (n - i != 3) {
+            printf("Usage: i-o write [-o] f addr cnt\n");
+            return;
+        }
+        if (LeerDireccion(arg[i + 1], &p) == -1) {
+            printf("Invalid address: %s\n", arg[i + 1]);
+            return;
+        }
+        if (LeerCantidad(arg[i + 2], &cont) == -1) {
+            printf("Invalid number of bytes: %s\n", arg[i + 2]);
+            return;
+        }
+        if ((df = open(arg[i], flags, 0666)) == -1) {
+            ErrorSis("open", arg[i]);
+            return;
+        }
+        res = write(df, p, cont);
+        if (res == -1)
+            ErrorSis("write", arg[i]);
+        else
+            printf("Wrote %ld bytes from %p into %s\n", (long) res, p, arg[i]);
+        close(df);
+        return;
+    }
+
+    printf("Usage: i-o [read|write] [-o] f addr cnt\n");
 }
 
-void Blocks(){
-    MemoryList(&list);
+// external variables for memory -vars
+int ext1 = 1, ext2 = 2, ext3 = 3;
+int extN1, extN2, extN3;
+
+void Blocks()
+{
+    MemoryList(&list, -1);
 }
 
-void Funcs(){
-    printf("Shell functions: %p, %p, %p\n", (void *)MemoryList, (void *)Cmd_deallocate, (void *)Cmd_io);
-    printf("Library functions: %p, %p, %p\n", (void *)malloc, (void *)strcmp, (void *)open);
+void Funcs()
+{
+    printf("Shell functions:   %p, %p, %p\n",
+           (void *) Cmd_allocate, (void *) Cmd_deallocate, (void *) MemoryList);
+    printf("Library functions: %p, %p, %p\n",
+           (void *) malloc, (void *) printf, (void *) strcmp);
 }
 
-void Vars(){
-    int a = 1, b = 2, c=3, e1 = 1, e2 = 2, e3 = 3;
+void Vars()
+{
+    int a1 = 1, a2 = 2, a3 = 3;
+    int b1, b2, b3;
     static int s1 = 1, s2 = 2, s3 = 3;
-    printf("Automatic: %p, %p, %p\n", (void *)&a, (void *)&b, (void *)&c);
-    printf("Static: %p, %p, %p\n", (void *)&s1, (void *)&s2, (void *)&s3);
-    printf("External: %p, %p, %p\n", (void *)&e1, (void *)&e2, (void *)&e3);
+    static int t1, t2, t3;
+
+    printf("Automatic variables:         %p, %p, %p\n", (void *) &a1, (void *) &a2, (void *) &a3);
+    printf("Automatic (not initialized): %p, %p, %p\n", (void *) &b1, (void *) &b2, (void *) &b3);
+    printf("Static variables:            %p, %p, %p\n", (void *) &s1, (void *) &s2, (void *) &s3);
+    printf("Static (not initialized):    %p, %p, %p\n", (void *) &t1, (void *) &t2, (void *) &t3);
+    printf("External variables:          %p, %p, %p\n", (void *) &ext1, (void *) &ext2, (void *) &ext3);
+    printf("External (not initialized):  %p, %p, %p\n", (void *) &extN1, (void *) &extN2, (void *) &extN3);
 }
 
-void Cmd_memory(char *arg[]){
-    if (arg[0] != NULL){
-        if (strcmp(arg[0], "-blocks") == 0)
-            Blocks();
-        else if (strcmp(arg[0], "-funcs")){
-            Funcs();
-        }
-        else if (strcmp(arg[0], "-vars")){
-            Vars();
-        }
-        else if (strcmp(arg[0], "-all")){
-            Blocks();
-            Funcs();
-            Vars();
-        }
-        else if (strcmp(arg[0], "-pmap")==0){
-            char pidstr[32];
-            snprintf(pidstr, sizeof pidstr, "%d", (int)getpid());
-            pid_t child = fork();
-            if (child==-1)
-                ErrorSis("Impossible to create process", NULL);
-            else if (child==0){
-                execlp("pmap", "pmap", pidstr, NULL);
-                ErrorSis("Impossible to execute pmap", NULL);
-                exit(1);
-            }
-            else
-                waitpid(child, NULL, 0);
-        }
+void Pmap()
+{
+    char pid[32];
+    pid_t hijo;
+
+    sprintf(pid, "%d", (int) getpid());
+    fflush(stdout);   // so the child does not get a copy of what is still in the buffer
+    if ((hijo = fork()) == -1) {
+        ErrorSis("create process", NULL);
+        return;
     }
-    else
-        ErrorSis("This command requires more arguments", NULL);
+    if (hijo == 0) {
+        execlp("pmap", "pmap", pid, NULL);
+        ErrorSis("execute", "pmap");
+        _exit(1);
+    }
+    waitpid(hijo, NULL, 0);
+}
+
+void Cmd_memory(char *arg[])
+{
+    int i;
+
+    if (arg[0] == NULL) {
+        Blocks();
+        Funcs();
+        Vars();
+        return;
+    }
+    for (i = 0; arg[i] != NULL; i++) {
+        if (!strcmp(arg[i], "-blocks"))
+            Blocks();
+        else if (!strcmp(arg[i], "-funcs"))
+            Funcs();
+        else if (!strcmp(arg[i], "-vars"))
+            Vars();
+        else if (!strcmp(arg[i], "-all")) {
+            Blocks();
+            Funcs();
+            Vars();
+        }
+        else if (!strcmp(arg[i], "-pmap"))
+            Pmap();
+        else
+            printf("Usage: memory [-blocks|-funcs|-vars|-all|-pmap]\n");
+    }
 }
 
 /**************************SHELL**************************/
@@ -1475,6 +1883,15 @@ static struct COMANDO C[] = {
     {"deltree", Cmd_deltree},
     {"listfile", Cmd_listfile},
     {"list", Cmd_list},
+    {"read", Cmd_read},
+    {"write", Cmd_write},
+    {"recurse", Cmd_recurse},
+    {"memfill", Cmd_memfill},
+    {"memdump", Cmd_memdump},
+    {"allocate", Cmd_allocate},
+    {"deallocate", Cmd_deallocate},
+    {"i-o", Cmd_io},
+    {"memory", Cmd_memory},
     {NULL, NULL}            /*NULL marks the end of the array*/
 };
 
